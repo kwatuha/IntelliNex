@@ -1,6 +1,11 @@
-# Kiplombe Medical Centre HMIS - Hospital Management Information System
+# IntelliNex - Hospital Management Information System (generic platform)
 
 A comprehensive Hospital Management Information System built with Next.js, TypeScript, and Tailwind CSS.
+
+## Branding model
+
+- **IntelliNex**: generic platform name (default)
+- **Kiplombe**: specific app/deployment brand (configurable via env)
 
 ## Features
 
@@ -53,7 +58,7 @@ The application includes a local authentication system with the following user r
    ```
 
 3. **Open Application**
-   Navigate to [http://localhost:3000](http://localhost:3000)
+   Navigate to [http://localhost:3100](http://localhost:3100)
 
 4. **Login**
    Use any of the demo credentials above to access the system
@@ -104,7 +109,7 @@ transelgon/
 
 ## Contributing
 
-This is a demo project for Kiplombe Medical Centre. For production use, additional security measures and backend integration would be required.
+This repo is the IntelliNex platform codebase. For production use, additional security measures and backend integration would be required.
 
 ## Contact Information
 

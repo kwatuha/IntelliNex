@@ -1,5 +1,5 @@
 {
-  "name": "my-v0-project",
+  "name": "intellinex",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -7,16 +7,18 @@
     "copy-zoom-css": "node scripts/copy-zoom-sdk-css.mjs",
     "postinstall": "node scripts/copy-zoom-sdk-css.mjs",
     "build": "node scripts/copy-zoom-sdk-css.mjs && next build",
-    "dev": "next dev --turbo -H 0.0.0.0",
+    "dev": "next dev --turbo -H 0.0.0.0 -p 3100",
     "dev:legacy": "next dev",
     "dev:3003": "next dev --turbo -H 0.0.0.0 -p 3003",
+    "dev:3100": "next dev --turbo -H 0.0.0.0 -p 3100",
     "lint": "next lint",
     "start": "next start",
     "start:prod": "next start -H 0.0.0.0",
     "build:prod": "npm run build && npm run start:prod",
     "precompile": "next build",
     "preview": "npm run build && next start -H 0.0.0.0",
-    "preview:3003": "npm run build && next start -H 0.0.0.0 -p 3003"
+    "preview:3003": "npm run build && next start -H 0.0.0.0 -p 3003",
+    "preview:3100": "npm run build && next start -H 0.0.0.0 -p 3100"
   },
   "dependencies": {
     "@emotion/is-prop-valid": "1.4.0",
@@ -86,9 +88,12 @@
     "zustand": "5.0.9"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.5",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "eslint": "^10.1.0",
+    "eslint-config-next": "^16.2.1",
     "typescript": "^5"
   }
 }

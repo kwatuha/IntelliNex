@@ -61,6 +61,7 @@ const telemedicineRoutes = require('./routes/telemedicineRoutes');
 
 const authenticate = require('./middleware/authenticate');
 
+const appName = process.env.APP_NAME || 'IntelliNex';
 const port = process.env.PORT || 3001;
 const app = express();
 
@@ -79,19 +80,8 @@ const getAllowedOrigins = () => {
     }
     return origins
   }
-  // In development, allow specific localhost origins (cannot use '*' with credentials: true)
-  return [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://localhost:3002',
-    'http://localhost:3003',
-    'http://localhost:3004',
-    'http://127.0.0.1:3000',
-    'http://127.0.0.1:3001',
-    'http://127.0.0.1:3002',
-    'http://127.0.0.1:3003',
-    'http://127.0.0.1:3004'
-  ]
+  // In development, allow any localhost port (cannot use '*' with credentials: true)
+  return ['__ALLOW_ANY_LOCALHOST_PORT__']
 }
 
 const corsOptions = {
@@ -99,6 +89,13 @@ const corsOptions = {
     const allowedOrigins = getAllowedOrigins();
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) {
+      return callback(null, true);
+    }
+    if (
+      process.env.NODE_ENV !== 'production' &&
+      allowedOrigins.includes('__ALLOW_ANY_LOCALHOST_PORT__') &&
+      /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+    ) {
       return callback(null, true);
     }
     if (allowedOrigins.includes(origin)) {
@@ -126,7 +123,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // Health check endpoint
 app.get('/', (req, res) => {
     res.json({
-        message: 'Welcome to Kiplombe Medical Centre HMIS API',
+        message: `Welcome to ${appName} API`,
         version: '1.0.0',
         status: 'running'
     });
@@ -220,7 +217,7 @@ app.use((req, res) => {
 });
 
 app.listen(port, () => {
-    console.log(`Kiplombe Medical Centre API server running on port ${port}`);
+    console.log(`${appName} API server running on port ${port}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 

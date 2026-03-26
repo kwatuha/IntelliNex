@@ -2,19 +2,19 @@ services:
   # MySQL Database
   mysql_db:
     image: mysql:8.0
-    container_name: kiplombe_mysql
+    container_name: intellinex_mysql
     restart: always
     command: --default-authentication-plugin=mysql_native_password
     environment:
       MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: kiplombe_hmis
-      MYSQL_USER: kiplombe_user
-      MYSQL_PASSWORD: kiplombe_password
+      MYSQL_DATABASE: intellinex
+      MYSQL_USER: intellinex_user
+      MYSQL_PASSWORD: intellinex_password
     volumes:
       - ./api/database/schema.sql:/docker-entrypoint-initdb.d/init.sql
       - db_data:/var/lib/mysql
     ports:
-      - "3308:3306"
+      - "3310:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
@@ -25,10 +25,10 @@ services:
   api:
     build:
       context: ./api
-    container_name: kiplombe_api
+    container_name: intellinex_api
     restart: unless-stopped
     ports:
-      - "3003:3001"
+      - "3101:3001"
     volumes:
       - ./api:/app
       - api_node_modules:/app/node_modules
@@ -41,11 +41,12 @@ services:
     environment:
       NODE_ENV: development
       DB_HOST: mysql_db
-      DB_USER: kiplombe_user
-      DB_PASSWORD: kiplombe_password
-      DB_NAME: kiplombe_hmis
+      DB_USER: intellinex_user
+      DB_PASSWORD: intellinex_password
+      DB_NAME: intellinex
       DB_PORT: 3306
       PORT: 3001
+      APP_NAME: IntelliNex
     command: sh -c "if [ ! -d node_modules ] || [ -z \"$(ls -A node_modules)\" ]; then npm install; fi && npx nodemon app.js"
 
   # Next.js 15 Frontend (Optimized with existing Dockerfile)
@@ -53,17 +54,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: kiplombe_frontend
+    container_name: intellinex_frontend
     restart: unless-stopped
     ports:
-      - "3004:3000"
+      - "3100:3000"
     volumes:
       - .:/app
       - frontend_node_modules:/app/node_modules
       - frontend_next:/app/.next
     environment:
       NODE_ENV: development
-      NEXT_PUBLIC_API_URL: http://localhost:3003
+      NEXT_PUBLIC_API_URL: http://localhost:3101
+      NEXT_PUBLIC_PRODUCT_NAME: IntelliNex
+      # Set this to "Kiplombe" for the specific Kiplombe deployment/app branding
+      NEXT_PUBLIC_APP_BRAND: IntelliNex
       HOSTNAME: "0.0.0.0"
       PORT: 3000
       NODE_OPTIONS: "--max-old-space-size=4096"

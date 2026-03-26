@@ -81,7 +81,7 @@ async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promis
         timeoutMs
           ? `Request timed out after ${timeoutMs}ms. The API may be slow, the database busy, or the request never reached the backend. ` +
               `Configured API base: ${base}. ` +
-              `For local dev, set NEXT_PUBLIC_API_URL to your API (e.g. http://localhost:3003) and restart Next.js.`
+              `For local dev, set NEXT_PUBLIC_API_URL to your API (e.g. http://localhost:3101) and restart Next.js.`
           : 'Request was cancelled.'
       );
     }

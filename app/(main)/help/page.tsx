@@ -25,6 +25,7 @@ import {
   Video,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { branding } from "@/lib/branding"
 
 function HelpPageContent() {
   const searchParams = useSearchParams()
@@ -35,7 +36,7 @@ function HelpPageContent() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Help & Documentation</h1>
         <p className="text-muted-foreground mt-2">
-          Comprehensive guide to using the Kiplombe Medical Centre HMIS system
+          Comprehensive guide to using the {branding.appBrand} system powered by {branding.productName}
         </p>
       </div>
 

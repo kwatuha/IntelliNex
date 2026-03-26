@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { useAuth } from "@/lib/auth/auth-context"
+import { branding } from "@/lib/branding"
 
 export function LoginForm() {
   const { login, isLoading } = useAuth()
@@ -30,8 +31,8 @@ export function LoginForm() {
     <div className="min-h-screen flex items-center justify-center bg-blue-50 p-4">
       <div className="w-full max-w-md space-y-6">
         <div className="text-center space-y-2">
-          <h1 className="text-2xl font-bold text-gray-900">Kiplombe Medical Centre HMIS</h1>
-          <p className="text-gray-600">Hospital Management Information System</p>
+          <h1 className="text-2xl font-bold text-gray-900">{branding.appBrand} MIS</h1>
+          <p className="text-gray-600">Powered by {branding.productName}</p>
         </div>
 
         <div className="bg-white p-6 rounded-lg shadow-lg">
@@ -104,7 +105,7 @@ export function LoginForm() {
         </div>
 
         <div className="text-center text-sm text-gray-500">
-          <p>© 2024 Kiplombe Medical Centre. All rights reserved.</p>
+          <p>© 2024 {branding.productName}. All rights reserved.</p>
           <p className="mt-1">P. O. Box 8407 - 30100, ELDORET | Tel: 0116695005</p>
           <p className="mt-1">Along Eldoret-Kiplombe Road, B&E Eagle House</p>
           <p className="mt-1">Email: mbemedicalcentre@gmail.com</p>

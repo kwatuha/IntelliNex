@@ -19,12 +19,12 @@ To avoid per-route dev compilation, use a **production** server locally — all 
 npm run preview
 ```
 
-Listens on **port 3000** (same as default `next dev`). Then open `http://localhost:3000`.
+Listens on **port 3000** by default. In this repo we generally run dev on **3100** to avoid conflicts, so use `preview:3100` below when you want it to match the Docker setup. Then open `http://localhost:3100`.
 
 Other port (e.g. to match Docker or API docs):
 
 ```bash
-npm run preview:3003
+npm run preview:3100
 ```
 
 - **First run:** `next build` can take several minutes (same as production).
@@ -53,6 +53,7 @@ After you’ve visited a page once in a session, Turbopack usually keeps it **ho
 ## API + Next.js
 
 Ensure **`NEXT_PUBLIC_API_URL`** points at your Node API (e.g. `http://localhost:3003`) when the UI is not served from the same origin as the API, and restart Next after changing env.
+Ensure **`NEXT_PUBLIC_API_URL`** points at your Node API (e.g. `http://localhost:3101`) when the UI is not served from the same origin as the API, and restart Next after changing env.
 
 ---
 

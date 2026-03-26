@@ -1,7 +1,7 @@
 {
-  "name": "kiplombe-medical-centre-api",
+  "name": "intellinex-api",
   "version": "1.0.0",
-  "description": "API server for Kiplombe Medical Centre HMIS",
+  "description": "API server for IntelliNex (generic platform) deployments",
   "main": "app.js",
   "scripts": {
     "start": "node app.js",

@@ -14,7 +14,7 @@
     --popover: 0 0% 100%;
     --popover-foreground: 224 71% 4%;
 
-    --primary: 215 100% 14%; /* Kiplombe Navy */
+    --primary: 215 100% 14%;
     --primary-foreground: 210 40% 98%;
 
     --secondary: 210 20% 93%;
@@ -23,7 +23,7 @@
     --muted: 210 20% 93%;
     --muted-foreground: 215 25% 35%;
 
-    --accent: 215 60% 45%; /* Kiplombe Blue */
+    --accent: 215 60% 45%;
     --accent-foreground: 210 40% 98%;
 
     --destructive: 0 84.2% 60.2%;
@@ -31,7 +31,7 @@
 
     --border: 214.3 32% 91%;
     --input: 214.3 32% 91%;
-    --ring: 215 100% 14%; /* Kiplombe Navy */
+    --ring: 215 100% 14%;
 
     --radius: 0.5rem;
 
@@ -66,7 +66,7 @@
     --muted: 215 30% 18%;
     --muted-foreground: 215 20% 75%;
 
-    --accent: 215 60% 45%; /* Kiplombe Blue */
+    --accent: 215 60% 45%;
     --accent-foreground: 0 0% 98%;
 
     --destructive: 0 62.8% 30.6%;

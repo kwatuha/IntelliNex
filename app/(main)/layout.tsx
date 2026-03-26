@@ -5,12 +5,13 @@ import "../globals.css"
 import { NavigationProvider } from "@/lib/navigation-context"
 import { MainLayoutContent } from "@/components/main-layout-content"
 import { ProtectedRoute } from "@/components/protected-route"
+import { branding } from "@/lib/branding"
 
 const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: "Kiplombe Medical Centre MIS",
-  description: "Hospital Management Information System for Kiplombe Medical Centre",
+  title: `${branding.appBrand} MIS`,
+  description: `Hospital Management Information System powered by ${branding.productName}`,
   generator: 'v0.dev'
 }
 

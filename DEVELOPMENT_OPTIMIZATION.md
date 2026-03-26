@@ -17,6 +17,7 @@ npm run preview
 This runs **`next build`** then **`next start`**. All routes are pre-built; navigation is fast. **Trade-off:** no hot reload — change code → run `preview` again (or use `dev` while editing).
 
 See **`docs/LOCAL_NEXT_DEV.md`** for details, ports (`preview:3003`), and how this relates to Telemedicine / Zoom testing.
+See **`docs/LOCAL_NEXT_DEV.md`** for details, ports (`preview:3100`), and how this relates to Telemedicine / Zoom testing.
 
 ## Daily coding
 

@@ -2,6 +2,7 @@
 
 import Image from "next/image"
 import { useState } from "react"
+import { branding } from "@/lib/branding"
 
 interface HospitalLogoImageProps {
   className?: string
@@ -29,12 +30,9 @@ export function HospitalLogoImage({
     return (
       <div className={`flex flex-col items-center justify-center ${className}`}>
         <div className={`text-xl font-bold tracking-tight ${isSidebar ? "text-white" : "text-[#0f4c75]"}`}>
-          KIPLOMBE
+          {branding.appBrand.toUpperCase()}
         </div>
-        <div className={`text-xs font-medium ${isSidebar ? "text-white/90" : "text-gray-600"}`}>Medical Centre</div>
-        {!isSidebar && (
-          <div className="text-xs text-blue-500 italic font-normal">For Quality Healthcare Service Delivery</div>
-        )}
+        <div className={`text-xs font-medium ${isSidebar ? "text-white/90" : "text-gray-600"}`}>{branding.productName}</div>
       </div>
     )
   }
@@ -44,7 +42,7 @@ export function HospitalLogoImage({
     <div className={`flex items-center justify-center ${className}`}>
       <Image
         src={triedSvg ? "/logo.svg" : "/logo.png"}
-        alt="Kiplombe Medical Centre"
+        alt={branding.appBrand}
         width={defaultWidth}
         height={defaultHeight}
         className="object-contain"
@@ -67,7 +65,7 @@ export function HospitalLogoPrint() {
     <div style={{ textAlign: "center", marginBottom: "20px" }}>
       <img
         src="/logo.png"
-        alt="Kiplombe Medical Centre"
+        alt={branding.appBrand}
         style={{ maxWidth: "150px", height: "auto", marginBottom: "10px" }}
         onError={(e) => {
           const target = e.target as HTMLImageElement
@@ -80,9 +78,8 @@ export function HospitalLogoPrint() {
             if (parent) {
               parent.innerHTML = `
                 <div style="text-align: center; margin-bottom: 20px;">
-                  <h1 style="margin: 0; font-size: 28px; font-weight: bold; color: #0f4c75; letter-spacing: 2px;">KIPLOMBE</h1>
-                  <h2 style="margin: 5px 0; font-size: 18px; color: #333;">Medical Centre</h2>
-                  <p style="margin: 5px 0; font-size: 12px; color: #666; font-style: italic;">For Quality Healthcare Service Delivery</p>
+                  <h1 style="margin: 0; font-size: 28px; font-weight: bold; color: #0f4c75; letter-spacing: 2px;">${branding.appBrand.toUpperCase()}</h1>
+                  <h2 style="margin: 5px 0; font-size: 18px; color: #333;">${branding.productName}</h2>
                 </div>
               `
             }
@@ -91,11 +88,8 @@ export function HospitalLogoPrint() {
       />
       <div style={{ marginTop: "10px" }}>
         <h2 style={{ margin: "5px 0", fontSize: "18px", color: "#333" }}>
-          Kiplombe Medical Centre
+          {branding.appBrand}
         </h2>
-        <p style={{ margin: "5px 0", fontSize: "12px", color: "#666", fontStyle: "italic" }}>
-          For Quality Healthcare Service Delivery
-        </p>
       </div>
     </div>
   )

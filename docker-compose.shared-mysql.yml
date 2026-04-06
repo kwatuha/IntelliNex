@@ -1,0 +1,105 @@
+# HMIS API + Next.js frontend — uses MySQL already running on this host (another Compose stack).
+# No bundled mysql_db service (saves ~512MiB+ RAM vs docker-compose.deploy.yml).
+#
+# Before first run (from host; example uses published port 3307 → container db):
+#   docker exec -it db mysql -uroot -p
+#   CREATE DATABASE your_hmis_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+#   CREATE USER 'your_hmis_user'@'%' IDENTIFIED BY 'strong_password';
+#   GRANT ALL ON your_hmis_db.* TO 'your_hmis_user'@'%';
+#   FLUSH PRIVILEGES;
+#
+# Discover the Docker network the MySQL container uses (API must join this network to reach hostname `db`):
+#   docker inspect db --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+# Set EXTERNAL_MYSQL_DOCKER_NETWORK in .env if it is not `projects_default`.
+#
+# Run:
+#   docker compose -f docker-compose.shared-mysql.yml --env-file .env up -d --build
+#
+# API only (static UI elsewhere): docker-compose.shared-mysql-api-only.yml + deploy/deploy-api-shared-mysql.sh
+#
+# Host port 3000 is often taken; frontend is published on HMIS_FRONTEND_PORT (default 3102).
+
+services:
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.prod
+    container_name: kiplombe_api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-3001}:3001"
+    volumes:
+      - api_uploads:/app/uploads
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DB_HOST: ${DB_HOST:-db}
+      DB_USER: ${MYSQL_USER:-${DB_USER:-kiplombe_user}}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-${DB_PASSWORD:-kiplombe_pass}}
+      DB_NAME: ${MYSQL_DATABASE:-${DB_NAME:-kiplombe_hmis}}
+      DB_PORT: ${DB_PORT:-3306}
+      JWT_SECRET: ${JWT_SECRET:-change_this_jwt_secret_in_production}
+      PORT: 3001
+      API_BASE_URL: ${API_BASE_URL:-http://kiplombe_api:3001}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+      FRONTEND_URL: ${FRONTEND_URL:-}
+    networks:
+      - hmis_app
+      - existing_mysql
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: kiplombe_frontend
+    restart: unless-stopped
+    ports:
+      - "${HMIS_FRONTEND_PORT:-3102}:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+      NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-}
+      HOSTNAME: "0.0.0.0"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - hmis_app
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 600s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+
+networks:
+  hmis_app:
+    driver: bridge
+  existing_mysql:
+    external: true
+    name: ${EXTERNAL_MYSQL_DOCKER_NETWORK:-projects_default}
+
+volumes:
+  api_uploads:
+    driver: local

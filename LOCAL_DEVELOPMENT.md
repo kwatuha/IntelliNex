@@ -12,22 +12,35 @@ docker compose up -d
 docker compose logs -f frontend
 
 # Access:
-# - Frontend: http://localhost:3002
-# - API: http://localhost:3001
-# - MySQL: localhost:3307
+# - Frontend: http://localhost:3100
+# - API: http://localhost:3101
+# - MySQL: localhost:3310
 ```
+
+## Initial database from Kiplombe (copy)
+
+IntelliNex uses a **separate** MySQL database (`intellinex`) so it can diverge from Kiplombe over time. To **seed** it from the Kiplombe container once:
+
+1. Start **both** projects’ MySQL containers (`kiplombe_mysql` from the Kiplombe repo, `intellinex_mysql` from this repo).
+2. Run:
+
+```bash
+./scripts/copy-kiplombe-db-to-intellinex.sh
+```
+
+This dumps `kiplombe_hmis` from `kiplombe_mysql`, renames the database to `intellinex`, and imports into `intellinex_mysql`. Override names/passwords with env vars documented in the script if your setup differs.
 
 ## Database Migrations
 
-If you get errors about missing columns, run migrations:
+If you get errors about missing columns, run migrations against **IntelliNex**’s DB:
 
 ```bash
 # Run a specific migration
-docker exec -i kiplombe_mysql mysql -u root -proot_password kiplombe_hmis < api/database/21_enhance_service_charges_for_procedures.sql
+docker exec -i intellinex_mysql mysql -u root -proot_password intellinex < api/database/21_enhance_service_charges_for_procedures.sql
 
 # Or run all migrations in order
 for file in api/database/*.sql; do
-  docker exec -i kiplombe_mysql mysql -u root -proot_password kiplombe_hmis < "$file"
+  docker exec -i intellinex_mysql mysql -u root -proot_password intellinex < "$file"
 done
 ```
 

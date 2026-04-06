@@ -6,6 +6,12 @@ const __dirname = path.dirname(__filename);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Static export: `npm run build` or `npm run build:hmis-static` → upload **everything** under `out/` into `public_html/hmis/`.
+  // Env: see `.env.example` (NEXT_PUBLIC_API_URL, NEXT_PUBLIC_BASE_URL). API CORS: `deploy/env.api-server.example` → `.env.api-server`.
+  output: 'export',
+  distDir: 'out',
+  basePath: '/hmis',
+  
   transpilePackages: ['@zoom/meetingsdk'],
   eslint: {
     ignoreDuringBuilds: true,
@@ -14,49 +20,25 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   images: {
+    // Required for 'output: export'
     unoptimized: true,
   },
   compiler: {
-    // Remove console logs in production
     removeConsole: process.env.NODE_ENV === 'production' ? {
       exclude: ['error', 'warn'],
     } : false,
   },
   onDemandEntries: {
-    // Keep pages in memory longer (60 minutes instead of 5)
     maxInactiveAge: 60 * 60 * 1000,
-    // Keep more pages in buffer for faster access
     pagesBufferLength: 100,
   },
-
-  // Enable faster refresh in development
   reactStrictMode: true,
-
-  // Disable source maps in development for faster compilation (can re-enable if needed for debugging)
   productionBrowserSourceMaps: false,
-  // Keep your DOCKER_BUILD logic
-  output: process.env.DOCKER_BUILD === 'true' ? 'standalone' : undefined,
 
-  /**
-   * Optional: Cross-Origin isolation improves Zoom gallery view / virtual backgrounds (SharedArrayBuffer).
-   * Set ENABLE_ZOOM_COEP_HEADERS=true when building — may affect other embeds/CDN assets site-wide.
-   * Also configure the same headers on your reverse proxy in production.
-   */
-  async headers() {
-    if (process.env.ENABLE_ZOOM_COEP_HEADERS === 'true') {
-      return [
-        {
-          source: '/:path*',
-          headers: [
-            { key: 'Cross-Origin-Embedder-Policy', value: 'require-corp' },
-            { key: 'Cross-Origin-Opener-Policy', value: 'same-origin' },
-          ],
-        },
-      ]
-    }
-    return []
-  },
-
+  // NOTE: Static exports do not support the headers() function. 
+  // You will need to set these COEP/COOP headers in your Webmin/Apache 
+  // configuration or .htaccess file instead.
+  
   experimental: {
     optimizePackageImports: [
       'lucide-react',
@@ -89,18 +71,15 @@ const nextConfig = {
       'date-fns',
       'framer-motion',
     ],
-    // Enable faster refresh
-    optimizeCss: false, // Disable CSS optimization in dev for faster builds
+    optimizeCss: false,
   },
 
-  // ADD THIS WEBPACK SECTION:
   webpack: (config, { isServer, dev }) => {
     config.resolve.alias = {
       ...config.resolve.alias,
       '@': path.resolve(__dirname, './'),
     };
 
-    // Handle Node.js modules for client-side only
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
@@ -112,13 +91,11 @@ const nextConfig = {
       };
     }
 
-    // Ensure qrcode.react is resolved correctly
     config.resolve.extensionAlias = {
       '.js': ['.js', '.ts', '.tsx'],
       '.jsx': ['.jsx', '.tsx'],
     };
 
-    // Enable webpack caching for faster rebuilds in development
     if (dev && !isServer) {
       config.cache = {
         type: 'filesystem',
@@ -128,12 +105,9 @@ const nextConfig = {
       };
     }
 
-    // Optimize module resolution
     config.resolve.modules = ['node_modules', path.resolve(__dirname, './')];
 
-    // Optimize for faster builds in development
     if (dev) {
-      // Reduce work in development
       config.optimization = config.optimization || {};
       config.optimization.removeAvailableModules = false;
       config.optimization.removeEmptyChunks = false;

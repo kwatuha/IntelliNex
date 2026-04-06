@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -39,6 +40,7 @@ interface AllPatientsTableProps {
 }
 
 export function AllPatientsTable({ onAddToQueue }: AllPatientsTableProps) {
+  const router = useRouter()
   const { toast } = useToast()
   const [searchQuery, setSearchQuery] = useState("")
   const [currentPage, setCurrentPage] = useState(1)
@@ -106,7 +108,7 @@ export function AllPatientsTable({ onAddToQueue }: AllPatientsTableProps) {
   const handleViewPatient = (patientId: string) => {
     // If user has full access, navigate directly to the patient profile page
     if (hasPermission("view_patient_full")) {
-      window.location.href = `/patients/${patientId}`
+      router.push(`/patients/${patientId}`)
     } else {
       // Otherwise, open the dialog with limited information
       setSelectedPatient(patientId)

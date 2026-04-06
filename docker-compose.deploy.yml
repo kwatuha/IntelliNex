@@ -1,6 +1,9 @@
 # Production Deployment Configuration for Kiplombe HMIS
 # Designed to run alongside existing applications on the server
 # (Compose spec v2+ — no top-level `version` key; avoids obsolete-version warnings)
+#
+# To use an existing MySQL container on the same host (no second mysqld), use instead:
+#   docker-compose.shared-mysql.yml
 
 services:
   # MySQL Database (optional - can use existing MySQL)

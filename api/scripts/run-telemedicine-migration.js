@@ -13,12 +13,13 @@ const mysql = require('mysql2/promise');
 const fs = require('fs');
 const path = require('path');
 require('../config/load-env');
+const { resolveDbHost } = require('../config/resolve-db-host');
 
 async function run() {
   let connection;
   try {
     connection = await mysql.createConnection({
-      host: process.env.DB_HOST || 'localhost',
+      host: resolveDbHost(),
       user: process.env.DB_USER || 'root',
       password: process.env.DB_PASSWORD || '',
       database: process.env.DB_NAME || 'kiplombe_hmis',
@@ -55,9 +56,16 @@ async function run() {
       path.join(__dirname, '../database/migrations/43_telemedicine_standalone_origin.sql'),
       'utf8'
     );
-    console.log('Running 43_telemedicine_standalone_origin.sql (standalone origin) ...');
+    console.log('Running 43_telemedicine_standalone_origin.sql (originType enum) ...');
     await connection.query(sql43);
-    console.log('✅ Done (including standalone telemedicine origin).');
+
+    const sql43q = fs.readFileSync(
+      path.join(__dirname, '../database/migrations/43_telemedicine_queue_origin.sql'),
+      'utf8'
+    );
+    console.log('Running 43_telemedicine_queue_origin.sql (queueEntryId + index) ...');
+    await connection.query(sql43q);
+    console.log('✅ Done (telemedicine + queue origin).');
   } catch (error) {
     console.error('❌ Migration failed:', error.message || error.code || error);
     if (error.code === 'ER_ACCESS_DENIED_ERROR') {

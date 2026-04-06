@@ -8,6 +8,7 @@ node_modules/
 # next.js
 /.next/
 /out/
+out.zip
 
 # production
 /build
@@ -35,6 +36,9 @@ api/.env.*
 !.env.example
 !**/.env.example
 !api/.env.example
+
+# Server DB dumps (may contain production data)
+/backups/
 
 # Generated from @zoom/meetingsdk (see scripts/copy-zoom-sdk-css.mjs)
 public/vendor/zoom-meetingsdk.css

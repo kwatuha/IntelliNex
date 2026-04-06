@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { AlertCircle, Loader2, Heart } from "lucide-react"
 import { HospitalLogoImage } from "@/components/hospital-logo-image"
+import { getAppHomeHref } from "@/lib/utils/url"
 
 export default function LoginPage() {
   const { login, isLoading, isAuthenticated } = useAuth()
@@ -37,9 +38,8 @@ export default function LoginPage() {
       const result = await login(username, password)
       if (result.success) {
         setIsRedirecting(true)
-        // FORCE a hard reload to ensure Middleware/Server sees the new session
-        // This stops the "flicker loop" on the first login
-        window.location.href = "/"
+        // Hard reload so the shell picks up auth; must use app URL (basePath), not "/"
+        window.location.href = getAppHomeHref()
       } else {
         setError(result.error || "Invalid username or password")
       }

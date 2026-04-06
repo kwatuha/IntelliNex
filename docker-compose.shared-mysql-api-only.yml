@@ -1,0 +1,59 @@
+# HMIS API only — uses existing MySQL container on the same Docker host (no bundled mysql_db, no Next container).
+# Use when the UI is a static export on another host (e.g. /hmis on shared hosting) and only the API runs here.
+#
+# Same prerequisites as docker-compose.shared-mysql.yml (DB user, EXTERNAL_MYSQL_DOCKER_NETWORK, etc.).
+#
+# Run:
+#   docker compose -f docker-compose.shared-mysql-api-only.yml --env-file .env up -d --build
+#
+# Do not run this at the same time as docker-compose.shared-mysql.yml — both use container name kiplombe_api.
+
+services:
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.prod
+    container_name: kiplombe_api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-3001}:3001"
+    volumes:
+      - api_uploads:/app/uploads
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DB_HOST: ${DB_HOST:-db}
+      # Prefer MYSQL_* (compose-style); else DB_* from .env (many templates only set DB_USER / DB_PASSWORD / DB_NAME).
+      DB_USER: ${MYSQL_USER:-${DB_USER:-kiplombe_user}}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-${DB_PASSWORD:-kiplombe_pass}}
+      DB_NAME: ${MYSQL_DATABASE:-${DB_NAME:-kiplombe_hmis}}
+      DB_PORT: ${DB_PORT:-3306}
+      JWT_SECRET: ${JWT_SECRET:-change_this_jwt_secret_in_production}
+      PORT: 3001
+      API_BASE_URL: ${API_BASE_URL:-http://kiplombe_api:3001}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+      FRONTEND_URL: ${FRONTEND_URL:-}
+    networks:
+      - existing_mysql
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+networks:
+  existing_mysql:
+    external: true
+    name: ${EXTERNAL_MYSQL_DOCKER_NETWORK:-projects_default}
+
+volumes:
+  api_uploads:
+    driver: local

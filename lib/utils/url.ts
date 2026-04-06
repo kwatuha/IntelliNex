@@ -32,6 +32,20 @@ export function getBaseUrl(): string {
 }
 
 /**
+ * Full URL to the deployed app home (includes basePath, e.g. /hmis).
+ * Use for `window.location` assignments — they bypass Next.js router basePath.
+ */
+export function getAppHomeHref(): string {
+  const fromEnv = (process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_FRONTEND_URL || "")
+    .replace(/\/$/, "")
+  if (fromEnv) return `${fromEnv}/`
+  if (typeof window === "undefined") return "/"
+  const bp =
+    (process.env.NEXT_PUBLIC_BASE_PATH || "/hmis").replace(/\/$/, "") || "/hmis"
+  return `${window.location.origin}${bp}/`
+}
+
+/**
  * Generate a full URL for asset verification
  * @param assetId - The asset ID
  * @param assetCode - The asset code (optional, for verification)

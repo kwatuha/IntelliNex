@@ -7,6 +7,7 @@
     "copy-zoom-css": "node scripts/copy-zoom-sdk-css.mjs",
     "postinstall": "node scripts/copy-zoom-sdk-css.mjs",
     "build": "node scripts/copy-zoom-sdk-css.mjs && next build",
+    "build:hmis-static": "bash deploy/build-static-for-hmis.sh",
     "dev": "next dev --turbo -H 0.0.0.0 -p 3100",
     "dev:legacy": "next dev",
     "dev:3003": "next dev --turbo -H 0.0.0.0 -p 3003",

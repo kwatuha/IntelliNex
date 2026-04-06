@@ -1,0 +1,16 @@
+# Next.js static export + basePath `/hmis`: deploy this file as `public_html/hmis/.htaccess`
+# Clean URLs: /hmis/login → login.html, /hmis/queue/service → queue/service.html
+
+DirectoryIndex index.html
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /hmis/
+
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  RewriteCond %{REQUEST_FILENAME}.html -f
+  RewriteRule ^ %{REQUEST_URI}.html [L]
+</IfModule>

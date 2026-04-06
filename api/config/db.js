@@ -1,9 +1,10 @@
 // Database connection configuration
 require('./load-env');
 const mysql = require('mysql2/promise');
+const { resolveDbHost } = require('./resolve-db-host');
 
 const pool = mysql.createPool({
-    host: process.env.DB_HOST || 'localhost',
+    host: resolveDbHost(),
     user: process.env.DB_USER || 'root',
     password: process.env.DB_PASSWORD || '',
     database: process.env.DB_NAME || 'kiplombe_hmis',

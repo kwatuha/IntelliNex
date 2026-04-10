@@ -89,13 +89,14 @@ services:
         reservations:
           memory: 512M
 
-  # Frontend (Next.js) - Production Build
-  # Dependencies are installed AFTER container creation to avoid long build times
+  # Frontend — static export baked at image build (Dockerfile.prod); container runs `serve` only.
   frontend:
     build:
       context: .
       dockerfile: Dockerfile.prod
-      # No build args needed - dependencies install at runtime
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-}
     container_name: kiplombe_frontend
     restart: unless-stopped
     expose:
@@ -105,7 +106,6 @@ services:
       - .env
     environment:
       NODE_ENV: production
-      # Runtime env var (for server-side rendering and build)
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
       # Base URL for QR codes and absolute links (e.g., http://41.89.173.8 or https://yourdomain.com)
       NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-}
@@ -115,19 +115,18 @@ services:
         condition: service_healthy
     networks:
       - kiplombe_network
-    # Increased start_period to allow time for dependency installation and build
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/hmis/"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 600s  # 10 minutes to allow npm install and build
+      start_period: 60s
     deploy:
       resources:
         limits:
-          memory: 2G  # Increased from 1G to prevent OOM kills during build
+          memory: 512M
         reservations:
-          memory: 1G  # Increased from 512M
+          memory: 128M
 
   # Nginx Reverse Proxy
   nginx:

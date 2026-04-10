@@ -1,11 +1,10 @@
 "use client"
 
-import { useParams } from "next/navigation"
 import { TelemedicineSessionPanel } from "@/components/telemedicine-session-panel"
+import { StaticRouteRegex, useResolvedRouteParam } from "@/lib/utils/static-export-params"
 
 export default function TelemedicineSessionPage() {
-  const params = useParams()
-  const sessionId = String(params.sessionId || "")
+  const sessionId = useResolvedRouteParam("sessionId", StaticRouteRegex.telemedicineSessionId)
   if (!sessionId) return null
   return <TelemedicineSessionPanel sessionId={sessionId} variant="page" />
 }

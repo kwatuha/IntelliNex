@@ -7,6 +7,11 @@
 #   docker compose -f docker-compose.shared-mysql-api-only.yml --env-file .env up -d --build
 #
 # Do not run this at the same time as docker-compose.shared-mysql.yml — both use container name kiplombe_api.
+#
+# HTTPS: nginx service api_https proxies :443 → api:3001. Run deploy/setup-api-https-selfsigned.sh first (TLS files in deploy/ssl/).
+#   docker compose -f docker-compose.shared-mysql-api-only.yml up -d
+# API only (no nginx): docker compose -f docker-compose.shared-mysql-api-only.yml up -d api
+# See deploy/HTTPS.md (API-only section).
 
 services:
   api:
@@ -48,6 +53,23 @@ services:
           memory: 1G
         reservations:
           memory: 512M
+
+  # TLS termination → api:3001. Requires deploy/ssl/fullchain.pem + privkey.pem (see deploy/setup-api-https-selfsigned.sh).
+  api_https:
+    image: nginx:alpine
+    container_name: kiplombe_api_nginx
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      # Host port (default 443). If something else uses 443, set API_HTTPS_PORT=8443 in .env.
+      - "${API_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/ssl:/etc/nginx/ssl:ro
+      - ./deploy/nginx-api-only.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - existing_mysql
 
 networks:
   existing_mysql:

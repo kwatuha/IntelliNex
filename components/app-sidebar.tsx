@@ -64,7 +64,6 @@ import { HospitalLogoImage } from "./hospital-logo-image"
 import { memo } from "react"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
-import { branding } from "@/lib/branding"
 
 interface AppSidebarProps {
   activeCategory: string
@@ -155,13 +154,9 @@ export const AppSidebar = memo(function AppSidebar({ activeCategory }: AppSideba
 
   return (
     <Sidebar style={{ backgroundColor: "#0f4c75" }} className="text-white">
-      <SidebarHeader className="flex shrink-0 items-center justify-center py-3 border-b border-white/10">
-        <Link href="/" className="flex flex-col items-center justify-center w-full gap-2">
-          <HospitalLogoImage variant="sidebar" className="max-w-[180px]" />
-          <div className="flex flex-col items-center text-center">
-            <span className="text-lg font-bold tracking-tight text-white">{branding.appBrand.toUpperCase()}</span>
-            <span className="text-xs font-medium text-white/90">{branding.productName}</span>
-          </div>
+      <SidebarHeader className="flex shrink-0 items-center justify-center border-b border-white/10 px-2 py-4">
+        <Link href="/" className="flex w-full flex-col items-center justify-center">
+          <HospitalLogoImage variant="sidebar" className="w-full max-w-[200px]" />
         </Link>
       </SidebarHeader>
       <SidebarContent className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">

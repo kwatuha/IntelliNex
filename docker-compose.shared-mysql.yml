@@ -13,7 +13,10 @@
 # Set EXTERNAL_MYSQL_DOCKER_NETWORK in .env if it is not `projects_default`.
 #
 # Run:
-#   docker compose -f docker-compose.shared-mysql.yml --env-file .env up -d --build
+#   docker compose -f docker-compose.shared-mysql.yml --env-file .env build --no-cache frontend
+#   docker compose -f docker-compose.shared-mysql.yml --env-file .env up -d
+# Frontend image bakes static export at **build** time (Dockerfile.prod); container only serves `out/` (fast start).
+# Set NEXT_PUBLIC_API_URL / NEXT_PUBLIC_BASE_URL in .env before build so the client points at your API.
 #
 # API only (static UI elsewhere): docker-compose.shared-mysql-api-only.yml + deploy/deploy-api-shared-mysql.sh
 #
@@ -64,6 +67,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.prod
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-}
     container_name: kiplombe_frontend
     restart: unless-stopped
     ports:
@@ -72,6 +78,7 @@ services:
       - .env
     environment:
       NODE_ENV: production
+      # NEXT_PUBLIC_* are baked at image build; runtime env cannot change client bundle
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
       NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-}
       HOSTNAME: "0.0.0.0"
@@ -80,18 +87,20 @@ services:
         condition: service_healthy
     networks:
       - hmis_app
+    # Static export is served under basePath /hmis (see next.config.mjs); "/" may 404 on serve
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/hmis/"]
       interval: 30s
       timeout: 10s
-      retries: 5
-      start_period: 600s
+      retries: 8
+      start_period: 60s
     deploy:
       resources:
         limits:
-          memory: 2G
-        reservations:
+          # Prebuilt static image only runs `serve` — low RAM (build happens at `docker compose build`).
           memory: 512M
+        reservations:
+          memory: 128M
 
 networks:
   hmis_app:

@@ -85,7 +85,7 @@ services:
   frontend:
     build:
       context: .
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile.prod.runtime
     container_name: kiplombe_frontend
     restart: unless-stopped
     expose:
@@ -111,6 +111,7 @@ services:
       - ./tailwind.config.ts:/app/tailwind.config.ts:ro
     environment:
       NODE_ENV: production
+      NODE_OPTIONS: "--max-old-space-size=4096"
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
       HOSTNAME: "0.0.0.0"
       # Enable fast rebuild mode
@@ -129,7 +130,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
+          memory: 5G
         reservations:
           memory: 1G
 

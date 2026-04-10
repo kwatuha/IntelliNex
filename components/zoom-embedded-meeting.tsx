@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react"
 import * as ReactNS from "react"
 import * as ReactDOMNS from "react-dom"
 import { telemedicineApi } from "@/lib/api"
+import { publicAssetUrl } from "@/lib/utils/url"
 import { useAuth } from "@/lib/auth/auth-context"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { TelemedicineHelpLink } from "@/components/telemedicine-help-link"
@@ -219,6 +220,35 @@ function viewSizesForSdk(el: HTMLElement, compact: boolean): { width: number; he
   }
 }
 
+/**
+ * Zoom 5.x minified code uses `key in obj` on nested `customize.*` values. Optional branches left out
+ * become `undefined`, and `'x' in undefined` throws: "right-hand side of 'in' should be an object".
+ * Match @zoom/meetingsdk `InitOptions.customize` (e.g. `meetingInfo` is an array; `sharing.options` exists).
+ */
+function zoomEmbeddedInitCustomize(viewW: number, viewH: number) {
+  return {
+    toolbar: {},
+    meetingInfo: [] as unknown[],
+    participants: {},
+    setting: {},
+    invite: {},
+    callMe: {},
+    chat: {},
+    meeting: {},
+    activeApps: {},
+    sharing: { options: {} },
+    video: {
+      isResizable: true,
+      defaultViewType: "speaker" as const,
+      popper: {},
+      viewSizes: {
+        default: { width: viewW, height: viewH },
+        ribbon: { width: viewW, height: viewH },
+      },
+    },
+  }
+}
+
 async function waitForNonZeroSize(el: HTMLElement, maxAttempts = 12): Promise<void> {
   for (let i = 0; i < maxAttempts; i++) {
     const r = el.getBoundingClientRect()
@@ -286,7 +316,7 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
     const link = document.createElement("link")
     link.id = id
     link.rel = "stylesheet"
-    link.href = "/vendor/zoom-meetingsdk.css"
+    link.href = publicAssetUrl("/vendor/zoom-meetingsdk.css")
     document.head.appendChild(link)
     return () => {
       try {
@@ -307,12 +337,15 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
     const scriptId = "hmis-zoom-embedded-runtime-js"
     const urls = [
       // Prefer local copied assets (works offline / pinned to installed package).
-      "/vendor/zoom-meeting-embedded-ES5.min.js",
-      "/vendor/zoomus-websdk-embedded.umd.min.js",
+      publicAssetUrl("/vendor/zoom-meeting-embedded-ES5.min.js"),
+      publicAssetUrl("/vendor/zoomus-websdk-embedded.umd.min.js"),
       // Fallback to Zoom CDN if local vendor asset is unavailable in this environment.
       "https://source.zoom.us/5.1.4/zoom-meeting-embedded-ES5.min.js",
     ]
-    const reactVendorUrls = ["/vendor/zoom-react18.min.js", "/vendor/zoom-react-dom18.min.js"]
+    const reactVendorUrls = [
+      publicAssetUrl("/vendor/zoom-react18.min.js"),
+      publicAssetUrl("/vendor/zoom-react-dom18.min.js"),
+    ]
     const diagnostics: string[] = []
 
     const injectScript = (id: string, src: string, onLoad: () => void, onError: () => void) => {
@@ -498,7 +531,7 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
         // Zoom 5.x minified code uses `in` on nested customize.* objects; missing keys must be objects, not undefined.
         if (typeof window !== "undefined" && (!window.React || !window.ReactDOM)) {
           throw new Error(
-            "Zoom Meeting SDK needs React 18 globals from /vendor/zoom-react18.min.js — scripts missing or blocked (check nginx serves public/vendor, CSP, and HTTPS).",
+            `Zoom Meeting SDK needs React 18 globals from ${publicAssetUrl("/vendor/zoom-react18.min.js")} — scripts missing or blocked (check the app basePath serves public/vendor, CSP, and HTTPS).`,
           )
         }
 
@@ -512,27 +545,8 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
             /**
              * Size the component view; height leaves room for the bottom toolbar inside the root.
              * `updateVideoOptions` + ResizeObserver keep this in sync after resize / “Larger video”.
-             * Include empty objects for optional customize branches so SDK never does `prop in undefined`.
              */
-            customize: {
-              video: {
-                isResizable: true,
-                defaultViewType: "speaker",
-                viewSizes: {
-                  default: { width: viewW, height: viewH },
-                  ribbon: { width: viewW, height: viewH },
-                },
-              },
-              toolbar: {},
-              meeting: {},
-              chat: {},
-              setting: {},
-              participants: {},
-              invite: {},
-              callMe: {},
-              activeApps: {},
-              sharing: {},
-            },
+            customize: zoomEmbeddedInitCustomize(viewW, viewH),
           }),
           ZOOM_INIT_TIMEOUT_MS,
           "Zoom SDK init"
@@ -597,6 +611,7 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
         client.updateVideoOptions({
           isResizable: true,
           defaultViewType: "speaker",
+          popper: {},
           viewSizes: {
             default: { width, height },
             ribbon: { width, height },

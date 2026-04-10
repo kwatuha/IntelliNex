@@ -1,0 +1,14 @@
+{
+  "rewrites": [
+    { "source": "/hmis/patients/*/history", "destination": "/hmis/patients/__export_placeholder__/history.html" },
+    { "source": "/hmis/patients/*", "destination": "/hmis/patients/__export_placeholder__.html" },
+    { "source": "/hmis/appointments/*", "destination": "/hmis/appointments/__export_placeholder__.html" },
+    { "source": "/hmis/doctors/*", "destination": "/hmis/doctors/__export_placeholder__.html" },
+    { "source": "/hmis/inventory/*", "destination": "/hmis/inventory/__export_placeholder__.html" },
+    { "source": "/hmis/procurement/orders/*", "destination": "/hmis/procurement/orders/__export_placeholder__.html" },
+    { "source": "/hmis/procurement/vendors/*", "destination": "/hmis/procurement/vendors/__export_placeholder__.html" },
+    { "source": "/hmis/departments/*", "destination": "/hmis/departments/__export_placeholder__.html" },
+    { "source": "/hmis/assets/verify/*", "destination": "/hmis/assets/verify/__export_placeholder__.html" },
+    { "source": "/hmis/telemedicine/*", "destination": "/hmis/telemedicine/__export_placeholder__.html" }
+  ]
+}

@@ -1,39 +1,40 @@
 # syntax=docker/dockerfile:1.5
-# Production Dockerfile - Install dependencies at runtime to avoid long build times
-# This approach installs dependencies AFTER container creation, not during build
+# Runtime install + build on container start (slow on small VPS; use Dockerfile.prod for production).
+# Used by docker-compose.fast-deploy.yml and docker-compose.deploy-fast.yml (volume-mounted source).
 
-FROM node:18-alpine
+FROM node:18-slim
+
+RUN apt-get update && apt-get install -y \
+    bash \
+    curl \
+    wget \
+    python3 \
+    make \
+    g++ \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install bash for scripts (Alpine doesn't have bash by default)
-RUN apk add --no-cache bash curl wget
-
-# Copy package files first (for better caching)
 COPY package*.json ./
+COPY tsconfig.json next.config.mjs tailwind.config.ts postcss.config.mjs components.json ./
+COPY app/ ./app/
+COPY components/ ./components/
+COPY lib/ ./lib/
+COPY public/ ./public/
+COPY styles/ ./styles/
+COPY hooks/ ./hooks/
+COPY scripts/ ./scripts/
+COPY nginx/ ./nginx/
+COPY deploy/ ./deploy/
 
-# Copy all application code
-COPY . .
-
-# Create entrypoint script
 COPY docker-entrypoint-prod.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY docker-entrypoint-fast.sh /entrypoint-fast.sh
+RUN chmod +x /entrypoint.sh /entrypoint-fast.sh
 
-# Expose port
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
 EXPOSE 3000
 
-# Set environment
-ENV NODE_ENV=production
-ENV DOCKER_BUILD=false
-
-# Use entrypoint that installs dependencies on first run
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["node", "server.js"]
-
-
-
-
-
-
-
-

@@ -1,6 +1,5 @@
 "use client"
 import { useState, useEffect } from "react"
-import { useParams } from "next/navigation"
 import {
   Activity,
   Calendar,
@@ -42,11 +41,11 @@ import { patientApi, insuranceApi, queueApi } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import Link from "next/link"
 import { AddToQueueDialog, type QueueServicePointChoice, queueTypeLabel } from "@/components/add-to-queue-dialog"
+import { StaticRouteRegex, useResolvedRouteParam } from "@/lib/utils/static-export-params"
 
 export default function PatientProfilePage() {
   const { toast } = useToast()
-  const params = useParams()
-  const patientId = params.id as string
+  const patientId = useResolvedRouteParam("id", StaticRouteRegex.patientId)
   const [patient, setPatient] = useState<any>(null)
   const [insuranceCompanyName, setInsuranceCompanyName] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)

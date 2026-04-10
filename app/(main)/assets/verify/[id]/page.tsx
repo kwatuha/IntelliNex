@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useParams, useSearchParams } from "next/navigation"
+import { useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -15,12 +15,12 @@ import { assetApi } from "@/lib/api"
 import { toast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth/auth-context"
 import { format } from "date-fns"
+import { StaticRouteRegex, useResolvedRouteParam } from "@/lib/utils/static-export-params"
 
 export default function AssetVerifyPage() {
-  const params = useParams()
   const searchParams = useSearchParams()
   const { user } = useAuth()
-  const assetId = params.id as string
+  const assetId = useResolvedRouteParam("id", StaticRouteRegex.assetVerifyId)
   const assetCode = searchParams.get("code")
 
   const [asset, setAsset] = useState<any>(null)

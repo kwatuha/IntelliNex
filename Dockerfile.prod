@@ -1,13 +1,14 @@
 # syntax=docker/dockerfile:1.5
-# Production Dockerfile for Next.js Frontend
-# Using standard Node image instead of Alpine to avoid SWC binary issues
-FROM node:18-slim
+# Multi-stage: `npm ci` + `next build` run at **image build** time (docker compose build / CI).
+# The running container only serves `out/` with `serve` — starts in seconds, minimal RAM (~200MiB).
+#
+# Required at build time (browser-embedded): pass build args from compose or:
+#   docker build -f Dockerfile.prod --build-arg NEXT_PUBLIC_API_URL=https://api.example.com .
+#
+# For volume-mounted dev/fast deploy (install at container start), use Dockerfile.prod.runtime instead.
 
-# Install build tools and glibc compatibility
+FROM node:18-slim AS builder
 RUN apt-get update && apt-get install -y \
-    bash \
-    curl \
-    wget \
     python3 \
     make \
     g++ \
@@ -16,11 +17,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# 1. Copy package files first (for better layer caching)
 COPY package*.json ./
+# postinstall runs scripts/copy-zoom-sdk-css.mjs — must exist before npm ci
+COPY scripts/ ./scripts/
+RUN npm ci --legacy-peer-deps
 
-# 2. Copy only necessary files/directories (faster than COPY . .)
-# This reduces the build context size and speeds up "exporting layers" step
 COPY tsconfig.json next.config.mjs tailwind.config.ts postcss.config.mjs components.json ./
 COPY app/ ./app/
 COPY components/ ./components/
@@ -28,25 +29,34 @@ COPY lib/ ./lib/
 COPY public/ ./public/
 COPY styles/ ./styles/
 COPY hooks/ ./hooks/
-COPY scripts/ ./scripts/
-COPY nginx/ ./nginx/
-COPY deploy/ ./deploy/
 
-# 3. Explicitly set permissions for the entrypoint
-# Using the specific script you have in your ls: docker-entrypoint-prod.sh
-COPY docker-entrypoint-prod.sh /entrypoint.sh
-COPY docker-entrypoint-fast.sh /entrypoint-fast.sh
-RUN chmod +x /entrypoint.sh /entrypoint-fast.sh
-
-# 4. Set production environment variables
+ARG NEXT_PUBLIC_API_URL=
+ARG NEXT_PUBLIC_BASE_URL=
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV DOCKER_BUILD=true
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV NEXT_PUBLIC_BASE_URL=${NEXT_PUBLIC_BASE_URL}
 
-# Expose the Next.js port
+RUN npm run build
+
+# Next static export is flat under out/; asset URLs use /hmis/_next/... so we serve a parent dir with an hmis/ subfolder.
+RUN test -f /app/out/index.html || (echo "ERROR: missing out/index.html after next build" && ls -la /app/out 2>&1 | head -30 && exit 1)
+
+FROM node:18-slim AS runner
+RUN apt-get update && apt-get install -y wget ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g serve@14.2.3
+
+# /srv/hmis/* → browser paths /hmis/* (matches basePath in next.config)
+WORKDIR /srv
+COPY --from=builder /app/out ./hmis
+# Deep links to /hmis/patients/123 etc.: static export only has __export_placeholder__ HTML
+COPY deploy/serve-hmis.json ./serve.json
+RUN chown -R node:node /srv
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
 EXPOSE 3000
-
-# The entrypoint handles:
-# - npm install (if node_modules missing)
-# - next build (the step currently failing)
-# - starting the server
-ENTRYPOINT ["/entrypoint.sh"]
+USER node
+CMD ["serve", "/srv", "-l", "tcp://0.0.0.0:3000", "--no-clipboard", "-n"]

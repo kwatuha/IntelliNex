@@ -72,7 +72,7 @@ export default function LoginPage() {
           <CardHeader className="space-y-8 pb-10 pt-10 px-8">
             <div className="flex justify-center">
               <div className="flex flex-col items-center space-y-6">
-                <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-50/50 to-indigo-50/50 border border-blue-100/50 shadow-inner">
+                <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-inner">
                   <HospitalLogoImage variant="default" width={320} height={110} />
                 </div>
               </div>

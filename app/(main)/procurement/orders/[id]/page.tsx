@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useParams } from "next/navigation"
+import { StaticRouteRegex, useResolvedRouteParam } from "@/lib/utils/static-export-params"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -12,8 +12,7 @@ import { BreadcrumbsEnhanced } from "@/components/breadcrumbs-enhanced"
 import { purchaseOrderApi } from "@/lib/api"
 
 export default function ProcurementOrderDetailPage() {
-  const params = useParams()
-  const orderId = params.id as string
+  const orderId = useResolvedRouteParam("id", StaticRouteRegex.procurementOrderId)
   const [order, setOrder] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

@@ -32,6 +32,17 @@ export function getBaseUrl(): string {
 }
 
 /**
+ * URL path for a file under `public/` when the app uses Next.js `basePath`.
+ * Root-relative `/vendor/...` would 404 under basePath `/hmis`; use this for script/link `src`/`href`.
+ */
+export function publicAssetUrl(assetPath: string): string {
+  const bp = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/$/, "")
+  const p = assetPath.startsWith("/") ? assetPath : `/${assetPath}`
+  if (!bp) return p
+  return `${bp}${p}`
+}
+
+/**
  * Full URL to the deployed app home (includes basePath, e.g. /hmis).
  * Use for `window.location` assignments — they bypass Next.js router basePath.
  */

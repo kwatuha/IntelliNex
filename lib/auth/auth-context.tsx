@@ -253,7 +253,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return { success: false, error: errorData.error || 'Invalid username or password' }
         }
       } catch (apiError) {
-        // If backend API fails, fall back to mock auth for development
+        const configuredApi = Boolean(
+          (process.env.NEXT_PUBLIC_API_URL || '').trim(),
+        )
+        const isProdBuild = process.env.NODE_ENV === 'production'
+        // Production builds with a configured API must not fall back to mock users — that
+        // shows "wrong password" when the real failure is mixed content, CORS, or network.
+        if (isProdBuild && configuredApi) {
+          console.error('HMIS API login request failed:', apiError)
+          return {
+            success: false,
+            error:
+              'Cannot reach the HMIS API from this page. Check that NEXT_PUBLIC_API_URL matches where the API is reachable (e.g. http://YOUR_IP:3001 when using published ports). If the page is HTTPS but NEXT_PUBLIC_API_URL is http://, the browser blocks the request — use HTTPS for the API or same-origin proxy.',
+          }
+        }
         console.warn('Backend login failed, using mock auth:', apiError)
         const user = await AuthService.login({ username, password })
 

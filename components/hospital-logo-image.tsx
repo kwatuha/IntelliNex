@@ -1,8 +1,10 @@
 "use client"
 
 import Image from "next/image"
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { branding } from "@/lib/branding"
+import { publicAssetUrl } from "@/lib/utils/url"
+import { cn } from "@/lib/utils"
 
 interface HospitalLogoImageProps {
   className?: string
@@ -11,49 +13,67 @@ interface HospitalLogoImageProps {
   variant?: "default" | "print" | "compact" | "sidebar"
 }
 
+/**
+ * Default logo chain (light backgrounds: login, print).
+ * For sidebar (dark #0f4c75), prefer optional “on dark” assets first — see `SIDEBAR_LOGO_PREFIX`.
+ */
+const LOGO_FILES = ["/logo_intelli.png", "/logo.png", "/logo.svg"] as const
+/** Tried before the default chain when variant is `sidebar` (transparent / light wordmark on dark blue). */
+const SIDEBAR_LOGO_PREFIX = ["/logo_intelli_darkbg.png", "/logo_intelli_sidebar.png"] as const
+
 export function HospitalLogoImage({
   className = "",
   width,
   height,
   variant = "default"
 }: HospitalLogoImageProps) {
-  const [imageError, setImageError] = useState(false)
-  const [triedSvg, setTriedSvg] = useState(false)
+  const [srcIndex, setSrcIndex] = useState(0)
+
+  const logoSrcChain = useMemo(() => {
+    if (variant === "sidebar") {
+      return [...SIDEBAR_LOGO_PREFIX.map((p) => publicAssetUrl(p)), ...LOGO_FILES.map((p) => publicAssetUrl(p))]
+    }
+    return LOGO_FILES.map((p) => publicAssetUrl(p))
+  }, [variant])
 
   // Default dimensions based on variant
   const defaultWidth = width || (variant === "compact" || variant === "sidebar" ? 120 : variant === "print" ? 150 : 240)
-  const defaultHeight = height || (variant === "compact" || variant === "sidebar" ? 40 : variant === "print" ? 50 : 80)
+  const defaultHeight = height || (variant === "compact" || variant === "sidebar" ? 48 : variant === "print" ? 50 : 80)
 
-  // If image failed to load, show text fallback (white for sidebar on dark background)
-  if (imageError && triedSvg) {
+  const exhausted = srcIndex >= logoSrcChain.length
+
+  if (exhausted) {
     const isSidebar = variant === "sidebar"
     return (
       <div className={`flex flex-col items-center justify-center ${className}`}>
-        <div className={`text-xl font-bold tracking-tight ${isSidebar ? "text-white" : "text-[#0f4c75]"}`}>
+        <div
+          className={cn(
+            "text-xl font-bold tracking-tight",
+            isSidebar ? "text-white drop-shadow-sm" : "text-[#0f4c75]"
+          )}
+        >
           {branding.appBrand.toUpperCase()}
         </div>
-        <div className={`text-xs font-medium ${isSidebar ? "text-white/90" : "text-gray-600"}`}>{branding.productName}</div>
+        <div className={cn("text-xs font-medium", isSidebar ? "text-white/85" : "text-gray-600")}>
+          {branding.productName}
+        </div>
       </div>
     )
   }
 
-  // For regular display, use Next.js Image component
   return (
-    <div className={`flex items-center justify-center ${className}`}>
+    <div className={cn("flex items-center justify-center", className)}>
       <Image
-        src={triedSvg ? "/logo.svg" : "/logo.png"}
+        src={logoSrcChain[srcIndex]}
         alt={branding.appBrand}
         width={defaultWidth}
         height={defaultHeight}
-        className="object-contain"
+        className={cn(
+          "object-contain w-auto",
+          variant === "sidebar" ? "max-h-[56px] drop-shadow-[0_2px_6px_rgba(0,0,0,0.35)]" : "max-h-[52px]"
+        )}
         priority
-        onError={() => {
-          if (!triedSvg) {
-            setTriedSvg(true)
-          } else {
-            setImageError(true)
-          }
-        }}
+        onError={() => setSrcIndex((i) => i + 1)}
       />
     </div>
   )
@@ -64,16 +84,17 @@ export function HospitalLogoPrint() {
   return (
     <div style={{ textAlign: "center", marginBottom: "20px" }}>
       <img
-        src="/logo.png"
+        src={publicAssetUrl("/logo_intelli.png")}
         alt={branding.appBrand}
         style={{ maxWidth: "150px", height: "auto", marginBottom: "10px" }}
         onError={(e) => {
           const target = e.target as HTMLImageElement
-          if (target.src.endsWith('.png')) {
-            target.src = '/logo.svg'
+          if (target.src.includes("logo_intelli")) {
+            target.src = publicAssetUrl("/logo.png")
+          } else if (target.src.endsWith(".png") && !target.src.includes("logo_intelli")) {
+            target.src = publicAssetUrl("/logo.svg")
           } else {
-            // Fallback to text
-            target.style.display = 'none'
+            target.style.display = "none"
             const parent = target.parentElement
             if (parent) {
               parent.innerHTML = `
@@ -94,4 +115,3 @@ export function HospitalLogoPrint() {
     </div>
   )
 }
-

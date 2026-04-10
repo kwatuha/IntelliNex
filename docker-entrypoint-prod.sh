@@ -39,27 +39,48 @@ else
     ls -F
 fi
 
-# 3. Build only if .next doesn't exist or is incomplete
-if [ -d ".next" ] && [ -f ".next/BUILD_ID" ] && [ -d ".next/standalone" ]; then
-    echo "✅ Build already exists, skipping rebuild..."
+# 3. Build only if output is missing (standalone server OR static export)
+if [ -f ".next/standalone/server.js" ]; then
+    echo "✅ Standalone build already exists, skipping rebuild..."
+elif [ -f "out/index.html" ] && [ -f ".next/BUILD_ID" ]; then
+    echo "✅ Static export (out/) already present, skipping rebuild..."
 else
     echo "🧹 Cleaning old build artifacts..."
-    rm -rf .next
+    rm -rf .next out
 
     echo "📦 Building Next.js application..."
     export DOCKER_BUILD=true
     [ -n "$NEXT_PUBLIC_API_URL" ] && export NEXT_PUBLIC_API_URL && echo "🔗 API URL: $NEXT_PUBLIC_API_URL"
 
-    # Execute build
-    npm run build || {
+    # Execute build (webpack can sit on "Creating an optimized production build" for many minutes on low-RAM hosts — not always frozen)
+    echo "=== next build starting ($(date -u +%H:%M:%S)Z) ==="
+    echo "   Tip: first build often takes 15–40+ min; host free -h can look fine while the *container* is cgroup-limited — check: docker inspect kiplombe_frontend --format '{{.HostConfig.Memory}}' (bytes; 0 = unlimited)"
+    echo "   Watch: docker stats kiplombe_frontend (if MEM% pegged near limit for hours, raise compose deploy.resources.limits.memory)"
+    set +e
+    ( n=1; while sleep 90; do
+        echo "   … build still running [${n}] $(date -u +%H:%M:%SZ) — if CPU is 0% for 15+ min, check OOM: dmesg | tail -20 | grep -i oom"
+        n=$((n+1))
+      done ) &
+    _HB_PID=$!
+    npm run build
+    BUILD_EXIT=$?
+    kill "${_HB_PID}" 2>/dev/null
+    wait "${_HB_PID}" 2>/dev/null
+    set -e
+    if [ "${BUILD_EXIT}" -ne 0 ]; then
         echo "❌ Build failed! This usually means the paths in tsconfig.json don't match the folder structure."
         echo "Showing directory structure for debugging:"
         find . -maxdepth 2 -not -path '*/.*'
         exit 1
-    }
+    fi
+    echo "=== next build finished OK ($(date -u +%H:%M:%S)Z) ==="
 fi
 
 echo "✅ Build completed successfully!"
+if [ -d "out" ]; then
+    echo "📂 Static export (first files in out/):"
+    ls -la out 2>/dev/null | head -15 || true
+fi
 
 # 4. Standalone Mode Configuration
 if [ -d ".next/standalone" ]; then
@@ -145,8 +166,27 @@ if [ -f ".next/standalone/server.js" ]; then
     fi
     cd .next/standalone
     exec node server.js
+elif [ -f "out/index.html" ] || [ -f "out/hmis/index.html" ]; then
+    # basePath /hmis → HTML references /hmis/_next/... — export is usually flat in out/, so we serve a parent folder with hmis/ mapping to out/.
+    echo "🚀 Static export — http://0.0.0.0:3000/hmis/ (basePath /hmis)"
+    SERVE_BIN="./node_modules/.bin/serve"
+    if [ ! -f "$SERVE_BIN" ]; then
+        echo "❌ missing $SERVE_BIN — ensure \"serve\" is in package.json and npm install ran."
+        exit 1
+    fi
+    if [ -f "out/hmis/index.html" ]; then
+        exec "$SERVE_BIN" out -l "tcp://0.0.0.0:3000" --no-clipboard -n
+    fi
+    mkdir -p .serve-root
+    rm -rf .serve-root/hmis
+    ln -sfn "$(pwd)/out" .serve-root/hmis
+    if [[ -f "deploy/serve-hmis.json" ]]; then
+      cp deploy/serve-hmis.json .serve-root/serve.json
+    fi
+    exec "$SERVE_BIN" .serve-root -l "tcp://0.0.0.0:3000" --no-clipboard -n
 else
-    echo "🚀 Using standard mode: npm start"
-    echo "   Note: If static files are missing, the build may be incomplete"
-    exec npm start
+    echo "❌ No standalone server and no static export (expected out/index.html — check next.config output: export + distDir must not be 'out')."
+    echo "Listing out/:"
+    ls -la out 2>/dev/null || echo "(no out directory)"
+    exit 1
 fi

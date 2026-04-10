@@ -1,14 +1,13 @@
 "use client"
 
-import { useParams } from "next/navigation"
 import { PatientHistory } from "@/components/patient-history"
 import { Button } from "@/components/ui/button"
 import { ArrowLeft } from "lucide-react"
 import Link from "next/link"
+import { StaticRouteRegex, useResolvedRouteParam } from "@/lib/utils/static-export-params"
 
 export default function PatientHistoryPage() {
-  const params = useParams()
-  const patientId = params.id as string
+  const patientId = useResolvedRouteParam("id", StaticRouteRegex.patientId)
 
   return (
     <div className="space-y-6">

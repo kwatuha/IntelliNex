@@ -1,6 +1,6 @@
 "use client"
 
-import { useParams } from "next/navigation"
+import { StaticRouteRegex, useResolvedRouteParam } from "@/lib/utils/static-export-params"
 import { useState, useEffect } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent } from "@/components/ui/card"
@@ -35,8 +35,7 @@ interface Doctor {
 }
 
 export default function DoctorDetailPage() {
-  const params = useParams()
-  const doctorId = params.id as string
+  const doctorId = useResolvedRouteParam("id", StaticRouteRegex.doctorId)
   const [doctor, setDoctor] = useState<Doctor | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

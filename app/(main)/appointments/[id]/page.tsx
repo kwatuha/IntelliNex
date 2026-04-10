@@ -1,6 +1,6 @@
 "use client"
 
-import { useParams } from "next/navigation"
+import { StaticRouteRegex, useResolvedRouteParam } from "@/lib/utils/static-export-params"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -117,8 +117,7 @@ const appointments = {
 }
 
 export default function AppointmentDetailPage() {
-  const params = useParams()
-  const appointmentId = params.id as string
+  const appointmentId = useResolvedRouteParam("id", StaticRouteRegex.appointmentId)
   const appointment = appointments[appointmentId] || null
 
   if (!appointment) {

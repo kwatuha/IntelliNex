@@ -3,6 +3,9 @@
 # Deploy API only — shared Docker MySQL on the same host (docker-compose.shared-mysql-api-only.yml)
 # =============================================================================
 #
+# Do not run API-only and full stack at once (same container names). When switching to full HMIS on the
+# same VPS, use deploy-full-shared-mysql.sh — it tears down the API-only stack under ~/intellinex-api first.
+#
 # Typical layout: static Next export + basePath on host A; this API on host B (VPS) with Docker,
 # attached to the existing `db` container network (e.g. projects_default).
 #
@@ -117,6 +120,20 @@ rsync -avz \
   -e "$RSYNC_RSH" \
   "$LOCAL_ROOT/$COMPOSE_FILE" "$REMOTE$COMPOSE_FILE"
 
+# HTTPS gateway (api_https): nginx config + setup script. Certs stay on the server (deploy/ssl/*.pem — not rsync'd).
+mkdir -p "$LOCAL_ROOT/deploy"
+if [[ -f "$LOCAL_ROOT/deploy/nginx-api-only.conf" ]]; then
+  echo "==> rsync deploy/nginx-api-only.conf + setup-api-https-selfsigned.sh"
+  ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+    "$SSH_USER@$SERVER_IP" "mkdir -p \"\$HOME/${REMOTE_DIR}/deploy/ssl\""
+  rsync -avz -e "$RSYNC_RSH" \
+    "$LOCAL_ROOT/deploy/nginx-api-only.conf" \
+    "$LOCAL_ROOT/deploy/setup-api-https-selfsigned.sh" \
+    "${REMOTE}deploy/"
+else
+  echo "WARN: deploy/nginx-api-only.conf missing locally — api_https will fail until it exists on the server." >&2
+fi
+
 ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$SSH_USER@$SERVER_IP" \
   REMOTE_DIR="$REMOTE_DIR" COMPOSE_FILE="$COMPOSE_FILE" BUILD_NO_CACHE="$BUILD_NO_CACHE" \
   RUN_TMIG="${DEPLOY_RUN_TELEMEDICINE_MIGRATIONS:-}" \
@@ -142,4 +159,5 @@ docker compose -f "${COMPOSE_FILE}" ps
 REMOTE
 
 echo "==> Done. Test: curl -sS http://${SERVER_IP}:3001/ | head -c 200"
-echo "    Ensure static site was built with NEXT_PUBLIC_API_URL=https://${SERVER_IP}:3001 (or your public API URL + HTTPS)."
+echo "    HTTPS (if api_https is up): curl -sk https://${SERVER_IP}/ | head -c 200"
+echo "    Ensure static site NEXT_PUBLIC_API_URL matches your public API URL (https://... if using TLS)."

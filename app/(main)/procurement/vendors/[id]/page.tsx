@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useParams } from "next/navigation"
+import { StaticRouteRegex, useResolvedRouteParam } from "@/lib/utils/static-export-params"
 import { vendorApi, purchaseOrderApi } from "@/lib/api"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -325,8 +325,7 @@ const sampleVendorData = {
 }
 
 export default function VendorDetailPage() {
-  const params = useParams()
-  const vendorId = params.id as string
+  const vendorId = useResolvedRouteParam("id", StaticRouteRegex.procurementVendorId)
   const [vendor, setVendor] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useParams, useRouter } from "next/navigation"
+import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { 
   Building2, 
@@ -29,11 +29,11 @@ import { departmentApi } from "@/lib/api"
 import { toast } from "@/components/ui/use-toast"
 import { formatDate } from "@/lib/date-utils"
 import { DepartmentForm } from "@/components/department-form"
+import { StaticRouteRegex, useResolvedRouteParam } from "@/lib/utils/static-export-params"
 
 export default function DepartmentDetailPage() {
-  const params = useParams()
   const router = useRouter()
-  const slug = params?.slug as string
+  const slug = useResolvedRouteParam("slug", StaticRouteRegex.departmentSlug)
 
   const [department, setDepartment] = useState<any>(null)
   const [employees, setEmployees] = useState<any[]>([])

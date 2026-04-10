@@ -2,8 +2,8 @@ import type { ReactNode } from "react"
 
 /**
  * Static export requires at least one generated path per dynamic segment.
- * Deploy: rewrite real URLs (e.g. /assets/verify/123) to this HTML file on the host
- * so the client receives the shell and useParams() still reflects the browser URL.
+ * Deploy: rewrite real URLs to this HTML (see deploy/serve-hmis.json). useParams() may stay
+ * __export_placeholder__; pages use useResolvedRouteParam() + pathname to read the real id.
  */
 export async function generateStaticParams() {
   return [{ id: "__export_placeholder__" }]

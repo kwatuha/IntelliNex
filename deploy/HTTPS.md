@@ -88,6 +88,48 @@ NEXT_PUBLIC_API_URL=https://165.22.227.234
 
 **Browsers:** self-signed certificates are **not** trusted automatically. `fetch()` from **`https://lau.lambdahoster.com`** to **`https://165.22.227.234`** may still fail until you use a **hostname + Let’s Encrypt** (e.g. `api.yourdomain.com`) or users import/trust the cert. `curl -k` / `curl --insecure` works for testing.
 
+**HTTPS still unreachable (connection refused)?** On the server, run:
+
+```bash
+bash deploy/check-https-api.sh
+```
+
+Typical fixes: start **`api_https`** (use `docker compose ... up -d`, not `up -d api` only), ensure **`deploy/ssl/fullchain.pem`** and **`privkey.pem`** exist, open **TCP 443** in **ufw** and the **cloud firewall**, or set **`API_HTTPS_PORT=8443`** if another process uses 443.
+
+---
+
+## D) Full stack `docker-compose.shared-mysql.yml` — HTTPS on :443 (UI + API same origin)
+
+Use this when **both** the HMIS UI and API run on the same VPS (ports 3102 / 3001 today) and you want **`https://YOUR_IP/hmis/`** instead of **`http://YOUR_IP:3102/hmis/`**, with **`/api`** on the same host (no mixed content).
+
+1. **Generate a self-signed cert** (same script as API-only; SAN must include your public IP):
+
+   ```bash
+   bash deploy/setup-api-https-selfsigned.sh 165.22.227.234
+   ```
+
+2. **Start the TLS gateway** with the Compose profile `https` (do not run the API-only `api_https` container on the same host if it also binds **443**):
+
+   ```bash
+   docker compose -f docker-compose.shared-mysql.yml --env-file .env --profile https up -d
+   ```
+
+   If **443** is already in use, set e.g. **`HMIS_HTTPS_PORT=8443`** in `.env` and open that port in the firewall. Users will open **`https://165.22.227.234:8443/hmis/`**.
+
+3. **Rebuild the static frontend** so the browser uses HTTPS and same-origin API calls:
+
+   ```env
+   NEXT_PUBLIC_API_URL=
+   NEXT_PUBLIC_BASE_URL=https://165.22.227.234/hmis
+   FRONTEND_URL=https://165.22.227.234
+   ```
+
+   (If you use a non-default HTTPS port, include it in all three: `https://IP:8443` / `https://IP:8443/hmis`.)
+
+4. **Browser:** self-signed → use “Advanced” → proceed, or trust `deploy/ssl/fullchain.pem`.
+
+Config file: **`deploy/nginx-fullstack-tls.conf`** (committed). Certs: **`deploy/ssl/`** (gitignored).
+
 ---
 
 ## Other notes

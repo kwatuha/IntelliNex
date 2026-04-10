@@ -21,6 +21,13 @@
 # API only (static UI elsewhere): docker-compose.shared-mysql-api-only.yml + deploy/deploy-api-shared-mysql.sh
 #
 # Host port 3000 is often taken; frontend is published on HMIS_FRONTEND_PORT (default 3102).
+#
+# HTTPS (optional): generate certs, then start with profile `https`:
+#   bash deploy/setup-api-https-selfsigned.sh YOUR_PUBLIC_IP
+#   docker compose -f docker-compose.shared-mysql.yml --env-file .env --profile https up -d
+# Opens https://YOUR_IP/hmis/ and https://YOUR_IP/api/ on HMIS_HTTPS_PORT (default 443).
+# Rebuild static frontend with NEXT_PUBLIC_API_URL empty (same-origin), NEXT_PUBLIC_BASE_URL=https://YOUR_IP/hmis,
+# FRONTEND_URL=https://YOUR_IP — see deploy/HTTPS.md section D.
 
 services:
   api:
@@ -101,6 +108,26 @@ services:
           memory: 512M
         reservations:
           memory: 128M
+
+  # Same-origin HTTPS for UI + API (use with profile: https). Requires deploy/ssl/*.pem.
+  nginx_https:
+    profiles:
+      - https
+    image: nginx:alpine
+    container_name: kiplombe_hmis_https
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    ports:
+      - "${HMIS_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/ssl:/etc/nginx/ssl:ro
+      - ./deploy/nginx-fullstack-tls.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - hmis_app
 
 networks:
   hmis_app:

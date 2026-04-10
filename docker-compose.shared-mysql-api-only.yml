@@ -12,6 +12,8 @@
 #   docker compose -f docker-compose.shared-mysql-api-only.yml up -d
 # API only (no nginx): docker compose -f docker-compose.shared-mysql-api-only.yml up -d api
 # See deploy/HTTPS.md (API-only section).
+#
+# `hmis_api_internal` ensures Docker DNS resolves hostname `api` for nginx (external-only networks can break service names on some hosts).
 
 services:
   api:
@@ -40,6 +42,7 @@ services:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
       FRONTEND_URL: ${FRONTEND_URL:-}
     networks:
+      - hmis_api_internal
       - existing_mysql
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/"]
@@ -69,9 +72,11 @@ services:
       - ./deploy/ssl:/etc/nginx/ssl:ro
       - ./deploy/nginx-api-only.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      - existing_mysql
+      - hmis_api_internal
 
 networks:
+  hmis_api_internal:
+    driver: bridge
   existing_mysql:
     external: true
     name: ${EXTERNAL_MYSQL_DOCKER_NETWORK:-projects_default}

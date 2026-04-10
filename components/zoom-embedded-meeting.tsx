@@ -221,32 +221,77 @@ function viewSizesForSdk(el: HTMLElement, compact: boolean): { width: number; he
 }
 
 /**
- * Zoom 5.x minified code uses `key in obj` on nested `customize.*` values. Optional branches left out
- * become `undefined`, and `'x' in undefined` throws: "right-hand side of 'in' should be an object".
- * Match @zoom/meetingsdk `InitOptions.customize` (e.g. `meetingInfo` is an array; `sharing.options` exists).
+ * Zoom 5.x minified code uses `key in obj` on nested `customize.*`; some builds choke on over-filled or
+ * under-filled objects. We try init in order until one succeeds (see `initEmbeddedClientWithFallback`).
  */
-function zoomEmbeddedInitCustomize(viewW: number, viewH: number) {
+function zoomEmbeddedCustomizeVideoOnly(viewW: number, viewH: number) {
   return {
-    toolbar: {},
-    meetingInfo: [] as unknown[],
-    participants: {},
-    setting: {},
-    invite: {},
-    callMe: {},
-    chat: {},
-    meeting: {},
-    activeApps: {},
-    sharing: { options: {} },
     video: {
       isResizable: true,
       defaultViewType: "speaker" as const,
-      popper: {},
+      popper: {} as Record<string, unknown>,
       viewSizes: {
         default: { width: viewW, height: viewH },
         ribbon: { width: viewW, height: viewH },
       },
     },
   }
+}
+
+/** Rich customize — all panel branches with `popper` / `meetingInfo` / `sharing.options` filled. */
+function zoomEmbeddedCustomizeFull(viewW: number, viewH: number) {
+  return {
+    toolbar: { buttons: [] as unknown[] },
+    meetingInfo: [] as unknown[],
+    participants: { popper: {} },
+    setting: { popper: {} },
+    invite: { popper: {} },
+    callMe: { popper: {} },
+    chat: { notificationCls: {}, popper: {} },
+    meeting: { popper: {} },
+    activeApps: { popper: {} },
+    sharing: { options: {} },
+    ...zoomEmbeddedCustomizeVideoOnly(viewW, viewH),
+  }
+}
+
+function isZoomInOperatorError(e: unknown): boolean {
+  const m = e instanceof Error ? e.message : String(e)
+  return m.includes("right-hand side of 'in'") || (m.includes("'in'") && m.includes("undefined"))
+}
+
+async function initEmbeddedClientWithFallback(
+  client: ZoomEmbeddedClient,
+  el: HTMLElement,
+  viewW: number,
+  viewH: number,
+): Promise<void> {
+  const base = {
+    zoomAppRoot: el,
+    language: "en-US" as const,
+    patchJsMedia: true,
+    assetPath: "https://source.zoom.us/5.1.4/lib/av",
+  }
+
+  const attempts: Array<{ label: string; customize?: Record<string, unknown> }> = [
+    { label: "customize:video-only", customize: zoomEmbeddedCustomizeVideoOnly(viewW, viewH) },
+    { label: "customize:none" },
+    { label: "customize:full", customize: zoomEmbeddedCustomizeFull(viewW, viewH) },
+  ]
+
+  let lastErr: unknown
+  for (const { label, customize } of attempts) {
+    try {
+      const opts =
+        customize !== undefined ? { ...base, customize } : { ...base }
+      await withTimeout(client.init(opts as Record<string, unknown>), ZOOM_INIT_TIMEOUT_MS, `Zoom SDK init (${label})`)
+      return
+    } catch (e) {
+      lastErr = e
+      if (!isZoomInOperatorError(e)) throw e
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
 }
 
 async function waitForNonZeroSize(el: HTMLElement, maxAttempts = 12): Promise<void> {
@@ -535,22 +580,7 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
           )
         }
 
-        await withTimeout(
-          client.init({
-            zoomAppRoot: el,
-            language: "en-US",
-            patchJsMedia: true,
-            /** Match installed @zoom/meetingsdk version — helps SDK load av/wasm assets consistently. */
-            assetPath: "https://source.zoom.us/5.1.4/lib/av",
-            /**
-             * Size the component view; height leaves room for the bottom toolbar inside the root.
-             * `updateVideoOptions` + ResizeObserver keep this in sync after resize / “Larger video”.
-             */
-            customize: zoomEmbeddedInitCustomize(viewW, viewH),
-          }),
-          ZOOM_INIT_TIMEOUT_MS,
-          "Zoom SDK init"
-        )
+        await initEmbeddedClientWithFallback(client, el, viewW, viewH)
         if (stale()) return
 
         const joinPayload: Record<string, unknown> = {
@@ -559,8 +589,9 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
           meetingNumber: String(data.meetingNumber),
           password: data.password != null ? String(data.password) : "",
           userName: userNameRef.current,
-          userEmail: userEmailRef.current || undefined,
         }
+        const email = userEmailRef.current?.trim()
+        if (email) joinPayload.userEmail = email
 
         const joinResult = await withTimeout(
           joinEmbeddedMeeting(client, joinPayload),

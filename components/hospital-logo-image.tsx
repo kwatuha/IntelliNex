@@ -14,10 +14,13 @@ interface HospitalLogoImageProps {
 }
 
 /**
- * Default logo chain (light backgrounds: login, print).
+ * Fallback chain when a preferred asset is missing (404).
  * For sidebar (dark #0f4c75), prefer optional “on dark” assets first — see `SIDEBAR_LOGO_PREFIX`.
+ * For default (login, light background), prefer `intellilogo_white.png` — see `LIGHT_BG_LOGO_PREFIX`.
  */
 const LOGO_FILES = ["/logo_intelli.png", "/logo.png", "/logo.svg"] as const
+/** Login / light UI — place `public/intellilogo_white.png` (suitable on white). */
+const LIGHT_BG_LOGO_PREFIX = ["/intellilogo_white.png"] as const
 /** Tried before the default chain when variant is `sidebar` (transparent / light wordmark on dark blue). */
 const SIDEBAR_LOGO_PREFIX = ["/logo_intelli_darkbg.png", "/logo_intelli_sidebar.png"] as const
 
@@ -33,12 +36,19 @@ export function HospitalLogoImage({
     if (variant === "sidebar") {
       return [...SIDEBAR_LOGO_PREFIX.map((p) => publicAssetUrl(p)), ...LOGO_FILES.map((p) => publicAssetUrl(p))]
     }
+    if (variant === "default") {
+      return [...LIGHT_BG_LOGO_PREFIX.map((p) => publicAssetUrl(p)), ...LOGO_FILES.map((p) => publicAssetUrl(p))]
+    }
     return LOGO_FILES.map((p) => publicAssetUrl(p))
   }, [variant])
 
-  // Default dimensions based on variant
-  const defaultWidth = width || (variant === "compact" || variant === "sidebar" ? 120 : variant === "print" ? 150 : 240)
-  const defaultHeight = height || (variant === "compact" || variant === "sidebar" ? 48 : variant === "print" ? 50 : 80)
+  // Default dimensions (Next/Image intrinsic size; display capped by className max-h-* per variant)
+  const defaultWidth =
+    width ||
+    (variant === "compact" ? 120 : variant === "sidebar" ? 240 : variant === "print" ? 150 : 320)
+  const defaultHeight =
+    height ||
+    (variant === "compact" ? 48 : variant === "sidebar" ? 96 : variant === "print" ? 50 : 120)
 
   const exhausted = srcIndex >= logoSrcChain.length
 
@@ -48,13 +58,20 @@ export function HospitalLogoImage({
       <div className={`flex flex-col items-center justify-center ${className}`}>
         <div
           className={cn(
-            "text-xl font-bold tracking-tight",
-            isSidebar ? "text-white drop-shadow-sm" : "text-[#0f4c75]"
+            "tracking-tight",
+            isSidebar
+              ? "text-2xl font-extrabold text-white [text-shadow:0_2px_8px_rgba(0,0,0,0.45)]"
+              : "text-xl font-bold text-[#0f4c75]"
           )}
         >
           {branding.appBrand.toUpperCase()}
         </div>
-        <div className={cn("text-xs font-medium", isSidebar ? "text-white/85" : "text-gray-600")}>
+        <div
+          className={cn(
+            "font-medium",
+            isSidebar ? "mt-0.5 text-sm text-white/95 [text-shadow:0_1px_4px_rgba(0,0,0,0.35)]" : "text-xs text-gray-600"
+          )}
+        >
           {branding.productName}
         </div>
       </div>
@@ -69,8 +86,12 @@ export function HospitalLogoImage({
         width={defaultWidth}
         height={defaultHeight}
         className={cn(
-          "object-contain w-auto",
-          variant === "sidebar" ? "max-h-[56px] drop-shadow-[0_2px_6px_rgba(0,0,0,0.35)]" : "max-h-[52px]"
+          "object-contain w-full",
+          variant === "sidebar" &&
+            "max-h-[96px] min-h-[56px] drop-shadow-[0_4px_14px_rgba(0,0,0,0.5)]",
+          variant === "default" && "max-h-[132px] sm:max-h-[140px]",
+          variant === "compact" && "max-h-12 w-auto",
+          variant === "print" && "max-h-[52px] w-auto"
         )}
         priority
         onError={() => setSrcIndex((i) => i + 1)}

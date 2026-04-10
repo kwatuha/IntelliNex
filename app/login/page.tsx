@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { AlertCircle, Loader2, Heart } from "lucide-react"
 import { HospitalLogoImage } from "@/components/hospital-logo-image"
+import { branding } from "@/lib/branding"
 import { getAppHomeHref } from "@/lib/utils/url"
 
 export default function LoginPage() {
@@ -71,10 +72,13 @@ export default function LoginPage() {
         <Card className="shadow-2xl border border-slate-200/50 bg-white/98 backdrop-blur-md transition-all duration-300 hover:shadow-3xl">
           <CardHeader className="space-y-8 pb-10 pt-10 px-8">
             <div className="flex justify-center">
-              <div className="flex flex-col items-center space-y-6">
-                <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-inner">
-                  <HospitalLogoImage variant="default" width={320} height={110} />
+              <div className="flex flex-col items-center space-y-3">
+                <div className="rounded-2xl border-2 border-[#0f4c75]/12 bg-gradient-to-b from-[#eef5fb] to-white p-6 shadow-[inset_0_1px_0_rgba(255,255,255,0.9),0_4px_24px_rgba(15,76,117,0.08)] ring-1 ring-slate-200/90">
+                  <HospitalLogoImage variant="default" width={360} height={120} />
                 </div>
+                <p className="text-center text-sm font-semibold tracking-wide text-[#0f4c75]">
+                  {branding.productName}
+                </p>
               </div>
             </div>
           </CardHeader>

@@ -1,0 +1,40 @@
+# Apache (cPanel) — reverse proxy for a dedicated HMIS subdomain, e.g. https://hmis.example.com
+# The Next app uses basePath `/hmis` and is served by Docker on the VPS as:
+#   http://VPS_IP:3102/hmis/...
+# A naive rule `^(.*)$ → http://VPS:3102/$1` sends `/` to `http://VPS:3102/` (wrong); it must include `/hmis`.
+#
+# Requires on the cPanel host: mod_proxy, mod_proxy_http, mod_rewrite, mod_headers (optional).
+# SSL for hmis.* is issued on cPanel (AutoSSL) — no SSL required on :3102 for this pattern.
+#
+# Copy into the subdomain’s document root as `.htaccess` and set VPS_IP. Test from shell on cPanel (if SSH):
+#   curl -sS -o /dev/null -w '%{http_code}\n' http://VPS_IP:3102/hmis/
+#
+# If you still get 503: the hosting server cannot reach VPS:3102 (firewall on VPS, or host blocks outbound :3102).
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # HTTPS page proxying to HTTP upstream — required on many Apache builds when the vhost is SSL.
+  SSLProxyEngine On
+
+  # Optional: help the Node API see HTTPS and original host (CORS / redirects).
+  <IfModule mod_headers.c>
+    RequestHeader set X-Forwarded-Proto "https" env=HTTPS
+    RequestHeader set X-Forwarded-Host "%{HTTP_HOST}e"
+  </IfModule>
+
+  # API on VPS (same-origin /api in browser when NEXT_PUBLIC_API_URL is empty).
+  # Must appear before the catch‑all UI rule.
+  RewriteRule ^api/(.*)$ http://165.22.227.234:3001/api/$1 [P,L]
+
+  # HMIS UI (static export under /hmis).
+  # https://hmis.../        → http://VPS:3102/hmis/
+  # https://hmis.../login   → http://VPS:3102/hmis/login
+  RewriteRule ^(.*)$ http://165.22.227.234:3102/hmis/$1 [P,L]
+</IfModule>
+
+# Do not forward raw proxy requests to clients.
+<IfModule mod_proxy.c>
+  ProxyRequests Off
+</IfModule>

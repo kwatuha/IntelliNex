@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Zoom</title>
+  <!--
+    On http://&lt;public-ip&gt; (not localhost), browsers omit navigator.mediaDevices.
+    Zoom’s bundle evaluates "getDisplayMedia" in navigator.mediaDevices — if mediaDevices is
+    undefined, V8 throws: right-hand side of 'in' should be an object, got undefined.
+    Stub before any Meeting SDK script. Real camera/mic still needs HTTPS (or localhost).
+  -->
+  <script>
+    (function () {
+      try {
+        if (typeof navigator !== "undefined" && navigator.mediaDevices == null) {
+          navigator.mediaDevices = {};
+        }
+      } catch (e) {}
+    })();
+  </script>
+  <!-- Served under basePath, e.g. /hmis/zoom-embed-host.html → relative vendor/ resolves to /hmis/vendor/ -->
+  <link rel="stylesheet" href="vendor/zoom-meetingsdk.css" />
+  <style>
+    html, body { margin: 0; height: 100%; width: 100%; background: #111; }
+    #zroot { height: 100%; width: 100%; min-height: 220px; }
+  </style>
+</head>
+<body>
+  <div id="zroot"></div>
+  <script src="vendor/zoom-react18.min.js"></script>
+  <script src="vendor/zoom-react-dom18.min.js"></script>
+  <script src="vendor/zoom-meeting-embedded-ES5.min.js"></script>
+  <script>
+(function () {
+  var targetOrigin = window.location.origin;
+  var activeClient = null;
+  var zoomGlobal = null;
+
+  /** Zoom often rejects with `{ type, reason }` (ExecutedFailure), not `Error` — avoid "[object Object]". */
+  function formatSdkError(err) {
+    if (err == null) return "Unknown error";
+    if (typeof err === "string") return err;
+    if (typeof err.message === "string" && err.message) return err.message;
+    if (typeof err === "object") {
+      var o = err;
+      if (typeof o.reason === "string") {
+        var bits = [];
+        if (o.type !== undefined && o.type !== null) bits.push("type:" + String(o.type));
+        bits.push(o.reason);
+        return bits.join(" ");
+      }
+      if (typeof o.errorMessage === "string") return o.errorMessage;
+      try {
+        return JSON.stringify(o);
+      } catch (e2) {
+        return Object.prototype.toString.call(o);
+      }
+    }
+    return String(err);
+  }
+
+  function resolveEmbedded() {
+    var z = window.ZoomMtgEmbedded;
+    if (z && typeof z.createClient === "function") return z;
+    return null;
+  }
+
+  function teardown() {
+    try {
+      if (activeClient && activeClient.leaveMeeting) activeClient.leaveMeeting();
+    } catch (e) {}
+    activeClient = null;
+    try {
+      if (zoomGlobal && zoomGlobal.destroyClient) zoomGlobal.destroyClient();
+    } catch (e) {}
+    zoomGlobal = null;
+  }
+
+  function runEmbed(payload) {
+    var embedGen = payload && payload.embedGen != null ? payload.embedGen : null;
+    teardown();
+    zoomGlobal = resolveEmbedded();
+    if (!zoomGlobal) {
+      window.parent.postMessage(
+        {
+          type: "zoom-embed-error",
+          message: "ZoomMtgEmbedded not available in iframe",
+          diagnostics: "iframe-resolve-failed",
+          embedGen: embedGen,
+        },
+        targetOrigin
+      );
+      return;
+    }
+    var el = document.getElementById("zroot");
+    var viewW = Math.max(320, Math.min(Number(payload.viewW) || 1280, 1920));
+    var viewH = Math.max(240, Math.min(Number(payload.viewH) || 720, 1080));
+    var toolbarReserve = 88;
+    var vh = Math.max(220, viewH - toolbarReserve);
+    /**
+     * Zoom 5.x embedded code uses `prop in options.popper` (etc.) on nested customize branches.
+     * If `popper` (or another branch) is missing, RHS of `in` is undefined →
+     * "right-hand side of 'in' should be an object, got undefined".
+     */
+    var customize = {
+      toolbar: { buttons: [] },
+      meetingInfo: [],
+      participants: { popper: {} },
+      setting: { popper: {} },
+      invite: { popper: {} },
+      callMe: { popper: {} },
+      chat: { notificationCls: {}, popper: {} },
+      meeting: { popper: {} },
+      activeApps: { popper: {} },
+      sharing: { options: {} },
+      video: {
+        popper: {},
+        isResizable: true,
+        defaultViewType: "speaker",
+        viewSizes: {
+          default: { width: viewW, height: vh },
+          ribbon: { width: viewW, height: vh },
+        },
+      },
+    };
+    var initOpts = {
+      zoomAppRoot: el,
+      language: "en-US",
+      patchJsMedia: false,
+      assetPath: "https://source.zoom.us/5.1.4/lib/av",
+      customize: customize,
+    };
+    activeClient = zoomGlobal.createClient();
+    var client = activeClient;
+    client
+      .init(initOpts)
+      .then(function () {
+        var join = {
+          signature: String(payload.signature || "").trim(),
+          meetingNumber: String(payload.meetingNumber || "").replace(/\s+/g, ""),
+          userName: (payload.userName && String(payload.userName).trim()) || "Guest",
+        };
+        if (payload.password) join.password = String(payload.password).trim();
+        if (payload.userEmail) join.userEmail = String(payload.userEmail).trim();
+        var out = client.join(join);
+        if (out && typeof out.then === "function") return out;
+        return Promise.reject(new Error("join did not return a Promise"));
+      })
+      .then(function (result) {
+        window.parent.postMessage(
+          { type: "zoom-embed-joined", resultType: result == null ? "null" : typeof result, embedGen: embedGen },
+          targetOrigin
+        );
+      })
+      .catch(function (err) {
+        window.parent.postMessage(
+          {
+            type: "zoom-embed-error",
+            message: formatSdkError(err),
+            diagnostics: "iframe-sdk-init-or-join",
+            embedGen: embedGen,
+          },
+          targetOrigin
+        );
+      });
+  }
+
+  function resizeEmbed(payload) {
+    if (!activeClient || !activeClient.updateVideoOptions) return;
+    var viewW = Math.max(320, Number(payload.viewW) || 1280);
+    var viewH = Math.max(240, Number(payload.viewH) || 720);
+    var toolbarReserve = 88;
+    var vh = Math.max(220, viewH - toolbarReserve);
+    try {
+      activeClient.updateVideoOptions({
+        isResizable: true,
+        defaultViewType: "speaker",
+        popper: {},
+        viewSizes: {
+          default: { width: viewW, height: vh },
+          ribbon: { width: viewW, height: vh },
+        },
+      });
+    } catch (e) {}
+  }
+
+  window.addEventListener("message", function (ev) {
+    if (ev.origin !== targetOrigin) return;
+    var d = ev.data;
+    if (!d || !d.type) return;
+    if (d.type === "zoom-embed-run") {
+      runEmbed(d.payload || {});
+    } else if (d.type === "zoom-embed-resize") {
+      resizeEmbed(d.payload || {});
+    } else if (d.type === "zoom-embed-abort") {
+      teardown();
+    }
+  });
+
+  window.parent.postMessage({ type: "zoom-embed-host-ready" }, targetOrigin);
+})();
+  </script>
+</body>
+</html>

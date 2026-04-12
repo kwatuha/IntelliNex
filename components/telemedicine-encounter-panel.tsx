@@ -233,10 +233,6 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
             <span className="font-medium text-foreground">{headerName}</span>
             {patientRow?.patientNumber ? ` · ${patientRow.patientNumber}` : ""}
           </p>
-          <p className="text-[11px] leading-snug text-muted-foreground">
-            Saves to <span className="font-medium text-foreground">medical_records</span> (visit type Outpatient; telemedicine is tagged in notes) and{" "}
-            <span className="font-medium text-foreground">pharmacy</span> for prescriptions.
-          </p>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col gap-2 p-3 pt-0">
           <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col gap-2">
@@ -365,9 +361,6 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
                     {rx.length > 0 && (
                       <section>
                         <h4 className="mb-2 font-semibold">Prescriptions</h4>
-                        <p className="mb-2 text-[11px] text-muted-foreground">
-                          Each block lists medications on that prescription (from pharmacy). Pending orders show until dispensed.
-                        </p>
                         <ul className="space-y-2 text-muted-foreground">
                           {[...rx]
                             .sort((a: any, b: any) => {

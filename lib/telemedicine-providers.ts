@@ -92,15 +92,6 @@ export function meetingLinkFieldLabel(providerId: string | null | undefined): st
   return "Meeting link"
 }
 
-export function openMeetingButtonLabel(providerId: string | null | undefined): string {
-  const p = providerId || "zoom_manual"
-  if (p === "zoom_manual") return "Open Zoom"
-  if (p === "google_meet") return "Open Meet"
-  if (p === "microsoft_teams") return "Open Teams"
-  if (p === "daily") return "Open Daily"
-  return "Open meeting"
-}
-
 export function isZoomProvider(providerId: string | null | undefined): boolean {
   return (providerId || "zoom_manual") === "zoom_manual"
 }

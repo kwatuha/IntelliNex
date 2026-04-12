@@ -4,28 +4,25 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useToast } from "@/hooks/use-toast"
 import { useTelemedicineFloating } from "@/lib/telemedicine-floating-context"
-import { openMeetingButtonLabel } from "@/lib/telemedicine-providers"
-import { Copy, ExternalLink, PanelRightOpen } from "lucide-react"
+import { Copy, PanelRightOpen } from "lucide-react"
 
 type Props = {
   sessionId: string | number
   zoomJoinUrl: string | null | undefined
-  provider?: string | null
   /** Tighter layout for table cells */
   compact?: boolean
   /** Hide "Join in HMIS" (e.g. on static marketing page) */
   hideOpenInPanel?: boolean
-  /** Hide the read-only URL field — use Copy link / Join only (link still used for actions). */
+  /** Hide the read-only URL field — Copy link / Join in HMIS still use the URL. */
   hideMeetingLinkField?: boolean
 }
 
 /**
- * Shows the stored meeting URL in a copy-friendly field plus Join (browser) and Join in HMIS (floating panel).
+ * Shows the stored meeting URL in a copy-friendly field plus Join in HMIS (floating panel) and Copy link.
  */
 export function TelemedicineMeetingLinkActions({
   sessionId,
   zoomJoinUrl,
-  provider,
   compact,
   hideOpenInPanel,
   hideMeetingLinkField,
@@ -47,18 +44,6 @@ export function TelemedicineMeetingLinkActions({
     } catch {
       toast({ title: "Copy failed", description: "Select the link in the box and copy manually.", variant: "destructive" })
     }
-  }
-
-  const joinExternal = () => {
-    if (!hasUrl) {
-      toast({
-        title: "No link yet",
-        description: "Open Join in HMIS and wait for the link, or ask the clinician to paste it.",
-        variant: "destructive",
-      })
-      return
-    }
-    window.open(url, "_blank", "noopener,noreferrer")
   }
 
   const joinInApp = () => {
@@ -97,16 +82,6 @@ export function TelemedicineMeetingLinkActions({
         </div>
       )}
       <div className={`flex flex-wrap gap-1.5 ${compact ? "" : "gap-2"}`}>
-        <Button
-          type="button"
-          size={compact ? "sm" : "default"}
-          className={compact ? "h-8 text-xs" : ""}
-          onClick={joinExternal}
-          title={`Opens meeting in a new tab (${openMeetingButtonLabel(provider)})`}
-        >
-          <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
-          Join meeting
-        </Button>
         {!hideOpenInPanel && (
           <Button
             type="button"

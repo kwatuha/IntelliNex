@@ -476,7 +476,6 @@ export default function TelemedicineCreatePage() {
                                 compact
                                 sessionId={s.sessionId}
                                 zoomJoinUrl={s.zoomJoinUrl}
-                                provider={s.provider}
                                 hideMeetingLinkField
                               />
                             </TableCell>

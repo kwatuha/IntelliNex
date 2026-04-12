@@ -19,18 +19,20 @@ const PAGE_SIZE = 25
 
 export default function TelemedicineHubPage() {
   const { toast } = useToast()
-  const [hubTab, setHubTab] = useState<"video" | "all">("video")
+  const [tab, setTab] = useState<"current" | "all">("current")
   const [page, setPage] = useState(1)
   const [allSessionsLoading, setAllSessionsLoading] = useState(false)
   const [sessions, setSessions] = useState<any[]>([])
   const [total, setTotal] = useState(0)
+  /** Bumped when an active visit ends so “All sessions” refetches. */
+  const [allSessionsVersion, setAllSessionsVersion] = useState(0)
 
   useLayoutEffect(() => {
-    if (hubTab === "all") setAllSessionsLoading(true)
-  }, [hubTab])
+    if (tab === "all") setAllSessionsLoading(true)
+  }, [tab])
 
   useEffect(() => {
-    if (hubTab !== "all") return
+    if (tab !== "all") return
     let cancelled = false
     ;(async () => {
       try {
@@ -59,7 +61,7 @@ export default function TelemedicineHubPage() {
     return () => {
       cancelled = true
     }
-  }, [hubTab, page, toast])
+  }, [tab, page, toast, allSessionsVersion])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -81,7 +83,10 @@ export default function TelemedicineHubPage() {
             Telemedicine
           </h1>
           <p className="text-muted-foreground text-sm mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span>Use the tabs below for live visits and history, or the full facility session list.</span>
+            <span>
+              <strong className="font-medium text-foreground">Current visits</strong> for the live board;{" "}
+              <strong className="font-medium text-foreground">All sessions</strong> lists active and ended visits, newest first.
+            </span>
             <TelemedicineHelpLink />
           </p>
         </div>
@@ -95,34 +100,44 @@ export default function TelemedicineHubPage() {
         </div>
       </div>
 
-      <Tabs value={hubTab} onValueChange={(v) => setHubTab(v as "video" | "all")} className="w-full space-y-4">
-        <TabsList className="grid h-auto w-full max-w-2xl grid-cols-2 gap-1 p-1">
-          <TabsTrigger value="video" className="gap-2 py-2.5">
-            <Video className="h-4 w-4 shrink-0" />
-            Video visits
-          </TabsTrigger>
-          <TabsTrigger value="all" className="gap-2 py-2.5">
-            <LayoutList className="h-4 w-4 shrink-0" />
-            All sessions
-          </TabsTrigger>
-        </TabsList>
+      <Card className="border-primary/20 bg-primary/5">
+        <Tabs
+          value={tab}
+          onValueChange={(v) => {
+            const next = v as "current" | "all"
+            setTab(next)
+            if (next === "all") setPage(1)
+          }}
+          className="w-full"
+        >
+          <CardHeader className="pb-2">
+            <CardTitle className="text-lg">Facility telemedicine</CardTitle>
+            <CardDescription className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span>One place for the live visit board and the full facility list.</span>
+              <TelemedicineHelpLink />
+            </CardDescription>
+            <TabsList className="mt-3 grid h-auto w-full max-w-2xl grid-cols-2 gap-1 p-1">
+              <TabsTrigger value="current" className="gap-2 py-2.5">
+                <Video className="h-4 w-4 shrink-0" />
+                Current visits
+              </TabsTrigger>
+              <TabsTrigger value="all" className="gap-2 py-2.5">
+                <LayoutList className="h-4 w-4 shrink-0" />
+                All sessions
+              </TabsTrigger>
+            </TabsList>
+          </CardHeader>
 
-        <TabsContent value="video" className="mt-0 outline-none focus-visible:ring-0">
-          <TelemedicineFacilityActiveVisits />
-        </TabsContent>
+          <CardContent className="pt-0">
+            <TabsContent value="current" className="mt-0 outline-none focus-visible:ring-0">
+              <TelemedicineFacilityActiveVisits onVisitEnded={() => setAllSessionsVersion((n) => n + 1)} />
+            </TabsContent>
 
-        <TabsContent value="all" className="mt-0 outline-none focus-visible:ring-0">
-          <Card>
-            <CardHeader>
-              <CardTitle>All sessions (recent)</CardTitle>
-              <CardDescription className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <span>
-                  Active and ended sessions (newest first). For utilization summaries on ended visits, open the Video visits tab → Recent sessions.
-                </span>
-                <TelemedicineHelpLink />
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
+            <TabsContent value="all" className="mt-0 outline-none focus-visible:ring-0 space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Active and ended sessions for your facility, ordered by <strong className="font-medium text-foreground">created date</strong> (newest
+                first).
+              </p>
               {allSessionsLoading ? (
                 <div className="flex justify-center py-12 text-muted-foreground">
                   <Loader2 className="h-8 w-8 animate-spin" />
@@ -137,7 +152,7 @@ export default function TelemedicineHubPage() {
                 </p>
               ) : (
                 <>
-                  <div className="rounded-md border overflow-x-auto">
+                  <div className="rounded-md border overflow-x-auto bg-background/50">
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -193,7 +208,6 @@ export default function TelemedicineHubPage() {
                                 compact
                                 sessionId={s.sessionId}
                                 zoomJoinUrl={s.zoomJoinUrl}
-                                provider={s.provider}
                                 hideMeetingLinkField
                               />
                             </TableCell>
@@ -203,7 +217,7 @@ export default function TelemedicineHubPage() {
                     </Table>
                   </div>
 
-                  <div className="flex items-center justify-between mt-4 pt-4 border-t">
+                  <div className="flex items-center justify-between pt-2 border-t">
                     <p className="text-sm text-muted-foreground">
                       Page {page} of {totalPages} · {total} total
                     </p>
@@ -220,10 +234,10 @@ export default function TelemedicineHubPage() {
                   </div>
                 </>
               )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+            </TabsContent>
+          </CardContent>
+        </Tabs>
+      </Card>
     </div>
   )
 }

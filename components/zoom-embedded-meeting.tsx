@@ -1,21 +1,33 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { telemedicineApi } from "@/lib/api"
+import { cn } from "@/lib/utils"
 import { publicAssetUrl } from "@/lib/utils/url"
 import { useAuth } from "@/lib/auth/auth-context"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { TelemedicineHelpLink } from "@/components/telemedicine-help-link"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Loader2, Maximize2, Minimize2 } from "lucide-react"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { zoomMeetingUrlsMatch } from "@/lib/zoom-url-utils"
+import { Info, Loader2 } from "lucide-react"
 
 export type ZoomEmbeddedMeetingProps = {
   sessionId: string
   /** Compact layout for floating panel */
   compact?: boolean
+  /**
+   * Floating dock: toolbar above the iframe (role badge, help). No tall footer; maximizes iframe height
+   * so Zoom’s own mic/camera/leave bar (inside the meeting, usually at the bottom) stays visible.
+   */
+  minimalChrome?: boolean
   className?: string
+  /** Session join URL — with `defaultZoomJoinUrl`, used to pick Meeting SDK role Host (1) vs Participant (0). */
+  sessionZoomJoinUrl?: string | null
+  /** Signed-in user’s “My Zoom defaults” URL — same meeting id as session → Host. */
+  defaultZoomJoinUrl?: string | null
 }
 
 /** Zoom reports whether this browser can use audio/video/screen (iframe path: not measured here). */
@@ -76,13 +88,15 @@ function measureZoomContainer(el: HTMLElement, compact: boolean): { width: numbe
   return { width: w, height: h }
 }
 
-const ZOOM_EMBED_TOOLBAR_RESERVE_PX = 88
-
+/**
+ * Full iframe `#zroot` dimensions passed to `zoom-embed-host.html`.
+ * (`ZOOM_INTERNAL_TOOLBAR_RESERVE_PX` in the host is 0 so canvas height matches the iframe.)
+ */
 function viewSizesForSdk(el: HTMLElement, compact: boolean): { width: number; height: number } {
   const m = measureZoomContainer(el, compact)
   return {
     width: m.width,
-    height: Math.max(220, m.height - ZOOM_EMBED_TOOLBAR_RESERVE_PX),
+    height: Math.max(220, m.height),
   }
 }
 
@@ -91,6 +105,28 @@ async function waitForNonZeroSize(el: HTMLElement, maxAttempts = 12): Promise<vo
     const r = el.getBoundingClientRect()
     if (r.width >= 100 && r.height >= 120) return
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+  }
+}
+
+/** Two rAFs: one layout pass after the container has a non-zero size (helps flex `flex-1` without blocking join). */
+async function waitTwoAnimationFrames(): Promise<void> {
+  await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+}
+
+function postZoomEmbedResize(
+  el: HTMLElement | null,
+  iframe: HTMLIFrameElement | null,
+  compact: boolean,
+): void {
+  if (!el || !iframe?.contentWindow) return
+  const { width, height } = viewSizesForSdk(el, compact)
+  try {
+    iframe.contentWindow.postMessage(
+      { type: "zoom-embed-resize", payload: { viewW: width, viewH: height } },
+      typeof window !== "undefined" ? window.location.origin : "*",
+    )
+  } catch {
+    /* ignore */
   }
 }
 
@@ -135,12 +171,30 @@ async function zoomProbeVendorReachability(diagnostics: string[]): Promise<void>
  * The iframe document loads only React 18 + Zoom (see `public/zoom-embed-host.html`), avoiding React 19 in the Next.js app
  * (which otherwise can break Zoom’s embedded join path with `in` on undefined).
  */
-export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbeddedMeetingProps) {
+export function ZoomEmbeddedMeeting({
+  sessionId,
+  compact,
+  minimalChrome = false,
+  className,
+  sessionZoomJoinUrl,
+  defaultZoomJoinUrl,
+}: ZoomEmbeddedMeetingProps) {
   const { user } = useAuth()
   const containerRef = useRef<HTMLDivElement>(null)
   const iframeRef = useRef<HTMLIFrameElement>(null)
 
-  const [sdkRole, setSdkRole] = useState<"0" | "1">("0")
+  /** Meeting SDK JWT role: 1 = host, 0 = participant. Inferred from session vs “My Zoom defaults” when both URLs are set. */
+  const sdkRole = useMemo<"0" | "1">(() => {
+    const s = (sessionZoomJoinUrl || "").trim()
+    const d = (defaultZoomJoinUrl || "").trim()
+    if (!s || !d) return "1"
+    return zoomMeetingUrlsMatch(s, d) ? "1" : "0"
+  }, [sessionZoomJoinUrl, defaultZoomJoinUrl])
+
+  const linkMatchesDefault = useMemo(
+    () => zoomMeetingUrlsMatch(sessionZoomJoinUrl, defaultZoomJoinUrl),
+    [sessionZoomJoinUrl, defaultZoomJoinUrl],
+  )
   const [phase, setPhase] = useState<"idle" | "loading" | "ready" | "error">("loading")
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [iframeHostReady, setIframeHostReady] = useState(false)
@@ -155,7 +209,6 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
   const compactRef = useRef(!!compact)
   compactRef.current = !!compact
 
-  const [expandedVideo, setExpandedVideo] = useState(false)
   const embedGenerationRef = useRef(0)
 
   /** `http://` to a LAN/public IP is not a secure context — camera/mic APIs are unavailable; Zoom shows a misleading “upgrade browser” error. */
@@ -183,7 +236,7 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
   useEffect(() => {
     function onMsg(ev: MessageEvent) {
       if (ev.origin !== window.location.origin) return
-      const d = ev.data as { type?: string; embedGen?: number } | null
+      const d = ev.data as { type?: string } | null
       if (!d || typeof d !== "object") return
       if (d.type === "zoom-embed-host-ready") {
         setIframeHostReady(true)
@@ -228,6 +281,7 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
         }
 
         await waitForNonZeroSize(el)
+        await waitTwoAnimationFrames()
         if (stale()) return
 
         const { width: viewW, height: viewH } = viewSizesForSdk(el, compactRef.current)
@@ -271,7 +325,10 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
           window.addEventListener("message", outcomeListener)
         })
 
-        iframe.contentWindow.postMessage({ type: "zoom-embed-run", payload }, window.location.origin)
+        iframe.contentWindow.postMessage(
+          { type: "zoom-embed-run", payload },
+          typeof window !== "undefined" ? window.location.origin : "*",
+        )
 
         try {
           await withTimeout(outcome, ZOOM_JOIN_TIMEOUT_MS, "Zoom iframe join")
@@ -282,7 +339,9 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
         }
         if (stale()) return
         diagnostics.push("iframe-join:ok")
-        if (!stale()) setPhase("ready")
+        if (!stale()) {
+          setPhase("ready")
+        }
       } catch (e: unknown) {
         if (stale()) return
         const msg = stringifySdkError(e)
@@ -299,7 +358,10 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
       cancelled = true
       embedGenerationRef.current += 1
       try {
-        iframeRef.current?.contentWindow?.postMessage({ type: "zoom-embed-abort" }, window.location.origin)
+        iframeRef.current?.contentWindow?.postMessage(
+          { type: "zoom-embed-abort" },
+          typeof window !== "undefined" ? window.location.origin : "*",
+        )
       } catch {
         /* ignore */
       }
@@ -312,129 +374,184 @@ export function ZoomEmbeddedMeeting({ sessionId, compact, className }: ZoomEmbed
     const iframe = iframeRef.current
     if (!el || !iframe?.contentWindow) return
 
-    const send = () => {
-      const { width, height } = viewSizesForSdk(el, compactRef.current)
-      try {
-        iframe.contentWindow?.postMessage(
-          { type: "zoom-embed-resize", payload: { viewW: width, viewH: height } },
-          window.location.origin,
-        )
-      } catch {
-        /* ignore */
-      }
-    }
+    const send = () => postZoomEmbedResize(el, iframe, compactRef.current)
 
     send()
+    /** One late sync after floating-panel flex height settles (no burst — avoids breaking SDK init). */
+    const delayed = window.setTimeout(send, 400)
     const ro = new ResizeObserver(() => send())
     ro.observe(el)
-    return () => ro.disconnect()
-  }, [phase, expandedVideo, compact])
+    return () => {
+      window.clearTimeout(delayed)
+      ro.disconnect()
+    }
+  }, [phase, compact])
 
+  /**
+   * Floating `minimalChrome`: fill flex height between toolbar and “Meeting link” (no `max-h` on parent).
+   * Non-floating compact uses a bounded 16:9-style box.
+   */
   const zoomRootFrameClass = compact
-    ? expandedVideo
-      ? "min-h-[300px] h-[min(78vh,780px)] w-full"
-      : "min-h-[280px] h-[min(58vh,600px)] w-full"
-    : expandedVideo
-      ? "min-h-[480px] h-[min(85vh,900px)] w-full"
-      : "min-h-[420px] h-[min(70vh,820px)] w-full"
+    ? minimalChrome
+      ? "min-h-0 w-full min-w-0 flex-1"
+      : "aspect-video w-full min-h-[260px] max-h-[min(52vh,540px)]"
+    : "aspect-video w-full min-h-[360px] max-h-[min(70vh,820px)]"
+
+  const compactTopBar = (
+    <div className="mb-0.5 flex shrink-0 flex-wrap items-center gap-1 border-b border-border/50 pb-0.5">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+        <Badge
+          variant={sdkRole === "1" ? "default" : "secondary"}
+          className="h-5 shrink-0 px-1.5 text-[10px] font-normal"
+          title={
+            linkMatchesDefault
+              ? "Meeting SDK role: same meeting id as My Zoom defaults → host"
+              : "Meeting SDK role: session link differs from your saved default → participant"
+          }
+        >
+          {sdkRole === "1" ? "Host" : "Participant"}
+        </Badge>
+      </div>
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0" title="Zoom tips">
+            <Info className="h-3.5 w-3.5" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-[min(100vw-2rem,20rem)] space-y-2 text-xs" align="start">
+          <p className="leading-relaxed text-muted-foreground">
+            The preview is sized so Zoom&apos;s bottom controls usually fit without scrolling. The frame is <strong className="text-foreground">16:9</strong>. HMIS uses the <strong className="text-foreground">embedded Meeting SDK</strong> — no separate “waiting room” page. If the bar is still hidden, open the visit on the <strong className="text-foreground">full session page</strong> or <strong className="text-foreground">minimize</strong> this dock.
+          </p>
+          <p className="leading-relaxed text-muted-foreground">
+            If Zoom shows an <strong className="text-foreground">apps or integrations</strong> notice, that is Zoom platform transparency — not an HMIS alert. Give the dock more room or use full page so the in-meeting toolbar stays visible.
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            <strong className="text-foreground">Host</strong> vs <strong className="text-foreground">Participant</strong> is the Zoom Meeting SDK
+            join role in the signed token. HMIS infers it from your session link vs <strong className="text-foreground">My Zoom defaults</strong> and
+            shows it on the badge (hover for detail).
+          </p>
+          <TelemedicineHelpLink />
+        </PopoverContent>
+      </Popover>
+    </div>
+  )
+
+  const controlsRow = (
+    <div className="mb-2 flex flex-wrap items-end gap-3">
+      <div className="flex flex-col gap-1">
+        <Label className="text-xs text-muted-foreground">Join as</Label>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge
+            variant={sdkRole === "1" ? "default" : "secondary"}
+            className="text-xs font-normal"
+            title={
+              linkMatchesDefault
+                ? "Meeting SDK role: same meeting id as My Zoom defaults → host"
+                : "Meeting SDK role: session link differs from your saved default → participant"
+            }
+          >
+            {sdkRole === "1" ? "Host" : "Participant"}
+          </Badge>
+        </div>
+      </div>
+      <p className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1">
+        <TelemedicineHelpLink />
+      </p>
+    </div>
+  )
+
+  const errorAlert =
+    phase === "error" && errorMessage ? (
+      <Alert variant="destructive" className="mb-2 shrink-0">
+        <AlertTitle>Could not embed meeting</AlertTitle>
+        <AlertDescription className="text-xs whitespace-pre-wrap space-y-2">
+          <span>{errorMessage}</span>
+          {(errorMessage.includes("Meeting has not started") ||
+            errorMessage.includes("JOIN_MEETING_FAILED") ||
+            errorMessage.toLowerCase().includes("not started")) && (
+            <span className="block border-t border-destructive/30 pt-2 font-medium">
+              If you are the meeting owner, set <strong className="font-medium">Join as</strong> to{" "}
+              <strong className="font-medium">Host</strong> — Participant only works after a host has started the room.
+            </span>
+          )}
+          {mediaEnv.insecureOrigin &&
+            (errorMessage.includes("INVALID_OPERATION") || errorMessage.toLowerCase().includes("audio/video")) && (
+              <span className="block border-t border-destructive/30 pt-2 font-medium">
+                Likely cause: insecure HTTP (see the notice above). Updating Chrome will not fix this until the site is served over HTTPS or you use localhost.
+              </span>
+            )}
+        </AlertDescription>
+      </Alert>
+    ) : null
+
+  const videoShell = (
+    <div
+      ref={containerRef}
+      className={cn(
+        "zoom-meeting-sdk-root relative overflow-hidden rounded-md border",
+        minimalChrome ? "bg-black" : "bg-black/5",
+        zoomRootFrameClass,
+        minimalChrome && "min-h-0 w-full min-w-0 flex flex-col",
+      )}
+    >
+      {phase === "loading" && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-background/85 px-3 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+          Loading Zoom Meeting SDK…
+        </div>
+      )}
+      <iframe
+        ref={iframeRef}
+        key={`${sessionId}-${sdkRole}`}
+        title="Zoom meeting"
+        src={iframeSrc}
+        className="absolute inset-0 h-full w-full border-0"
+        allow="camera; microphone; fullscreen; display-capture; clipboard-read; clipboard-write"
+      />
+    </div>
+  )
+
+  const readyFooter =
+    phase === "ready" && !minimalChrome ? (
+      <div className="mt-2 space-y-2">
+        <p className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span>
+            Use Zoom&apos;s toolbar at the <strong className="font-medium">bottom of the meeting</strong> for audio, video, and leave (visible after the room loads; turn camera on if it was off).
+          </span>
+          <TelemedicineHelpLink />
+        </p>
+      </div>
+    ) : null
 
   return (
-    <div className={className}>
+    <div className={cn(className, minimalChrome && "flex min-h-0 min-w-0 flex-1 flex-col")}>
       {mediaEnv.insecureOrigin && (
-        <Alert className="mb-2 border-amber-500/50 bg-amber-500/10 text-amber-950 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-50">
+        <Alert className="mb-2 shrink-0 border-amber-500/50 bg-amber-500/10 text-amber-950 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-50">
           <AlertTitle className="text-sm">HTTPS (or localhost) required for embedded Zoom</AlertTitle>
           <AlertDescription className="text-xs leading-relaxed">
             This page is <strong className="font-medium">not a secure context</strong> ({mediaEnv.hostname ? `http://${mediaEnv.hostname}…` : "HTTP"}). Browsers do not expose camera/microphone there, so the Meeting SDK cannot run video/audio and Zoom may say to “upgrade your browser”—that message is misleading. Serve HMIS over{" "}
             <strong className="font-medium">HTTPS</strong> (e.g. nginx or Caddy with a certificate) or test embedded video at{" "}
-            <strong className="font-medium">http://localhost</strong>. If you must stay on HTTP, use <strong className="font-medium">Join meeting</strong> or{" "}
-            <strong className="font-medium">Open in new tab</strong> on the session panel instead of the embedded view.
+            <strong className="font-medium">http://localhost</strong>. If you must stay on HTTP, use <strong className="font-medium">Join in HMIS</strong>{" "}
+            on the telemedicine board and <strong className="font-medium">Copy link</strong> (or your vendor app) instead of embedded video here.
           </AlertDescription>
         </Alert>
       )}
 
-      <div className="mb-2 flex flex-wrap items-end gap-3">
-        <div className="space-y-1">
-          <Label className="text-xs text-muted-foreground">SDK join role</Label>
-          <Select value={sdkRole} onValueChange={(v) => setSdkRole(v as "0" | "1")}>
-            <SelectTrigger className="h-8 w-[200px] text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="1">Host (1) — typical for meeting owner</SelectItem>
-              <SelectItem value="0">Participant (0) — if you join someone else&apos;s room</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 gap-1.5 text-xs"
-            title="Taller video area (same meeting; iframe posts resize to the Zoom view)"
-            onClick={() => setExpandedVideo((v) => !v)}
-          >
-            {expandedVideo ? (
-              <>
-                <Minimize2 className="h-3.5 w-3.5" />
-                Smaller video area
-              </>
-            ) : (
-              <>
-                <Maximize2 className="h-3.5 w-3.5" />
-                Larger video area
-              </>
-            )}
-          </Button>
-        </div>
-        <p className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span>Role change reloads the embed.</span>
-          <TelemedicineHelpLink />
-        </p>
-      </div>
-
-      {phase === "error" && errorMessage && (
-        <Alert variant="destructive" className="mb-2">
-          <AlertTitle>Could not embed meeting</AlertTitle>
-          <AlertDescription className="text-xs whitespace-pre-wrap space-y-2">
-            <span>{errorMessage}</span>
-            {mediaEnv.insecureOrigin &&
-              (errorMessage.includes("INVALID_OPERATION") || errorMessage.toLowerCase().includes("audio/video")) && (
-                <span className="block border-t border-destructive/30 pt-2 font-medium">
-                  Likely cause: insecure HTTP (see the notice above). Updating Chrome will not fix this until the site is served over HTTPS or you use localhost.
-                </span>
-              )}
-          </AlertDescription>
-        </Alert>
-      )}
-
-      <div
-        ref={containerRef}
-        className={`zoom-meeting-sdk-root relative overflow-x-hidden overflow-y-visible rounded-md border bg-black/5 ${zoomRootFrameClass}`}
-      >
-        {phase === "loading" && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-background/85 px-3 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-            Loading Zoom Meeting SDK…
+      {minimalChrome ? (
+        <>
+          {errorAlert}
+          {compactTopBar}
+          <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col">
+            {videoShell}
           </div>
-        )}
-        <iframe
-          ref={iframeRef}
-          key={`${sessionId}-${sdkRole}`}
-          title="Zoom meeting"
-          src={iframeSrc}
-          className="h-full w-full min-h-[240px] border-0"
-          allow="camera; microphone; fullscreen; display-capture; clipboard-read; clipboard-write"
-        />
-      </div>
-
-      {phase === "ready" && (
-        <div className="mt-2 space-y-2">
-          <p className="text-[11px] text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span>Use Zoom&apos;s toolbar for audio, video, and leave.</span>
-            <TelemedicineHelpLink />
-          </p>
-        </div>
+        </>
+      ) : (
+        <>
+          {controlsRow}
+          {errorAlert}
+          {videoShell}
+          {readyFooter}
+        </>
       )}
     </div>
   )

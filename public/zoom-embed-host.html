@@ -22,8 +22,37 @@
   <!-- Served under basePath, e.g. /hmis/zoom-embed-host.html → relative vendor/ resolves to /hmis/vendor/ -->
   <link rel="stylesheet" href="vendor/zoom-meetingsdk.css" />
   <style>
-    html, body { margin: 0; height: 100%; width: 100%; background: #111; }
-    #zroot { height: 100%; width: 100%; min-height: 220px; }
+    html, body { margin: 0; height: 100%; width: 100%; background: #111; overflow: hidden; }
+    /* Allow vertical scroll so Zoom’s bottom toolbar (mic / camera / join audio) isn’t clipped when
+       the in-meeting layout is taller than the iframe. */
+    #zroot {
+      height: 100%;
+      width: 100%;
+      min-height: 220px;
+      position: relative;
+      overflow-x: hidden;
+      overflow-y: auto;
+      box-sizing: border-box;
+      -webkit-overflow-scrolling: touch;
+    }
+    /*
+     * Active Apps / “Apps accessing content” — clinical UX: avoid alarming patients in the video pane.
+     * Zoom may still enforce notices in some builds; HMIS also explains this outside the iframe for staff.
+     */
+    #zroot [class*="active-app"],
+    #zroot [class*="ActiveApp"],
+    #zroot [class*="active-apps"],
+    #zroot button[aria-label*="Active App"],
+    #zroot [data-feature="active-apps"] {
+      opacity: 0 !important;
+      pointer-events: none !important;
+      visibility: hidden !important;
+      position: absolute !important;
+      width: 0 !important;
+      height: 0 !important;
+      overflow: hidden !important;
+      clip: rect(0, 0, 0, 0) !important;
+    }
   </style>
 </head>
 <body>
@@ -33,9 +62,12 @@
   <script src="vendor/zoom-meeting-embedded-ES5.min.js"></script>
   <script>
 (function () {
-  var targetOrigin = window.location.origin;
   var activeClient = null;
   var zoomGlobal = null;
+  /** Matches `payload.embedGen` from the last `zoom-embed-run` (parent uses it to ignore stale replies). */
+  var activeEmbedGen = null;
+  /** Keep video canvas height aligned with `#zroot`; reserve caused layout issues with inner scroll + controls. */
+  var ZOOM_INTERNAL_TOOLBAR_RESERVE_PX = 0;
 
   /** Zoom often rejects with `{ type, reason }` (ExecutedFailure), not `Error` — avoid "[object Object]". */
   function formatSdkError(err) {
@@ -66,7 +98,82 @@
     return null;
   }
 
+  var activeAppsObserver = null;
+
+  function installActiveAppsSuppression() {
+    try {
+      if (activeAppsObserver) {
+        activeAppsObserver.disconnect();
+        activeAppsObserver = null;
+      }
+      activeAppsObserver = new MutationObserver(function () {
+        try {
+          var zroot = document.getElementById("zroot");
+          if (!zroot) return;
+          var nodes = zroot.querySelectorAll(
+            '[role="dialog"], [class*="zm-modal"], [class*="popover"], button, [class*="active-app"]'
+          );
+          for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            var tx = (el.textContent || "").trim();
+            if (tx.length > 400) continue;
+            if (/Apps Accessing Content|Active Apps Notifier|active app/i.test(tx)) {
+              var hide = el.closest('[role="dialog"]') || el.closest(".zm-modal") || el;
+              hide.style.setProperty("display", "none", "important");
+            }
+          }
+        } catch (e0) {}
+      });
+      activeAppsObserver.observe(document.body, { childList: true, subtree: true });
+    } catch (e1) {}
+  }
+
+  /**
+   * `viewSizes.default` = speaker + gallery; `viewSizes.ribbon` = vertical ribbon (narrow width).
+   * Setting both to the full container (previous bug) caused a persistent grey band and video pinned to
+   * the bottom once the camera started — see Zoom component-view resizing docs.
+   */
+  function componentViewSizes(viewW, viewH) {
+    var vh = Math.max(220, viewH - ZOOM_INTERNAL_TOOLBAR_RESERVE_PX);
+    var ribbonW = Math.max(240, Math.min(316, Math.round(viewW * 0.28)));
+    if (ribbonW > viewW - 48) {
+      ribbonW = Math.max(240, Math.min(316, viewW - 48));
+    }
+    return {
+      default: { width: viewW, height: vh },
+      ribbon: { width: ribbonW, height: vh },
+    };
+  }
+
+  /** Scroll `#zroot` so Zoom’s bottom toolbar is in view (same as manual scroll). Re-run after layout. */
+  function scrollZrootToBottom() {
+    try {
+      var z = document.getElementById("zroot");
+      if (!z) return;
+      z.scrollTop = z.scrollHeight;
+    } catch (e) {}
+  }
+
+  function scheduleScrollZrootToBottomAfterJoin() {
+    scrollZrootToBottom();
+    window.requestAnimationFrame(function () {
+      scrollZrootToBottom();
+      window.requestAnimationFrame(function () {
+        scrollZrootToBottom();
+      });
+    });
+    [80, 200, 500, 1200].forEach(function (ms) {
+      window.setTimeout(scrollZrootToBottom, ms);
+    });
+  }
+
   function teardown() {
+    try {
+      if (activeAppsObserver) {
+        activeAppsObserver.disconnect();
+        activeAppsObserver = null;
+      }
+    } catch (e) {}
     try {
       if (activeClient && activeClient.leaveMeeting) activeClient.leaveMeeting();
     } catch (e) {}
@@ -75,11 +182,13 @@
       if (zoomGlobal && zoomGlobal.destroyClient) zoomGlobal.destroyClient();
     } catch (e) {}
     zoomGlobal = null;
+    activeEmbedGen = null;
   }
 
   function runEmbed(payload) {
     var embedGen = payload && payload.embedGen != null ? payload.embedGen : null;
     teardown();
+    activeEmbedGen = embedGen;
     zoomGlobal = resolveEmbedded();
     if (!zoomGlobal) {
       window.parent.postMessage(
@@ -89,15 +198,14 @@
           diagnostics: "iframe-resolve-failed",
           embedGen: embedGen,
         },
-        targetOrigin
+        "*"
       );
       return;
     }
     var el = document.getElementById("zroot");
     var viewW = Math.max(320, Math.min(Number(payload.viewW) || 1280, 1920));
     var viewH = Math.max(240, Math.min(Number(payload.viewH) || 720, 1080));
-    var toolbarReserve = 88;
-    var vh = Math.max(220, viewH - toolbarReserve);
+    var vs = componentViewSizes(viewW, viewH);
     /**
      * Zoom 5.x embedded code uses `prop in options.popper` (etc.) on nested customize branches.
      * If `popper` (or another branch) is missing, RHS of `in` is undefined →
@@ -118,10 +226,7 @@
         popper: {},
         isResizable: true,
         defaultViewType: "speaker",
-        viewSizes: {
-          default: { width: viewW, height: vh },
-          ribbon: { width: viewW, height: vh },
-        },
+        viewSizes: vs,
       },
     };
     var initOpts = {
@@ -150,8 +255,10 @@
       .then(function (result) {
         window.parent.postMessage(
           { type: "zoom-embed-joined", resultType: result == null ? "null" : typeof result, embedGen: embedGen },
-          targetOrigin
+          "*"
         );
+        installActiveAppsSuppression();
+        scheduleScrollZrootToBottomAfterJoin();
       })
       .catch(function (err) {
         window.parent.postMessage(
@@ -161,7 +268,7 @@
             diagnostics: "iframe-sdk-init-or-join",
             embedGen: embedGen,
           },
-          targetOrigin
+          "*"
         );
       });
   }
@@ -170,23 +277,20 @@
     if (!activeClient || !activeClient.updateVideoOptions) return;
     var viewW = Math.max(320, Number(payload.viewW) || 1280);
     var viewH = Math.max(240, Number(payload.viewH) || 720);
-    var toolbarReserve = 88;
-    var vh = Math.max(220, viewH - toolbarReserve);
+    var vs = componentViewSizes(viewW, viewH);
     try {
       activeClient.updateVideoOptions({
         isResizable: true,
         defaultViewType: "speaker",
         popper: {},
-        viewSizes: {
-          default: { width: viewW, height: vh },
-          ribbon: { width: viewW, height: vh },
-        },
+        viewSizes: vs,
       });
     } catch (e) {}
   }
 
   window.addEventListener("message", function (ev) {
-    if (ev.origin !== targetOrigin) return;
+    if (window.parent === window) return;
+    if (ev.source !== window.parent) return;
     var d = ev.data;
     if (!d || !d.type) return;
     if (d.type === "zoom-embed-run") {
@@ -198,7 +302,7 @@
     }
   });
 
-  window.parent.postMessage({ type: "zoom-embed-host-ready" }, targetOrigin);
+  window.parent.postMessage({ type: "zoom-embed-host-ready" }, "*");
 })();
   </script>
 </body>

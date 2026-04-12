@@ -515,7 +515,7 @@ router.post('/sessions', async (req, res) => {
       await connection.rollback();
       return res.status(403).json({
         error:
-          'Save your meeting defaults under Telemedicine → My Zoom defaults before starting a new visit. You can join an active visit using Join meeting or Join in HMIS on the telemedicine board.',
+          'Save your meeting defaults under Telemedicine → My Zoom defaults before starting a new visit. You can join an active visit using Join in HMIS on the telemedicine board.',
         code: 'TELEMEDICINE_ZOOM_DEFAULTS_REQUIRED',
       });
     }

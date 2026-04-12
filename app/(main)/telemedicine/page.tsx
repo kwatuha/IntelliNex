@@ -1,8 +1,8 @@
 "use client"
 
-import { useEffect, useLayoutEffect, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import Link from "next/link"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -10,10 +10,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { telemedicineApi } from "@/lib/api"
 import { getTelemedicineProviderLabel } from "@/lib/telemedicine-providers"
 import { useToast } from "@/hooks/use-toast"
-import { ChevronLeft, ChevronRight, LayoutList, Loader2, Settings, Video } from "lucide-react"
-import { TelemedicineFacilityActiveVisits } from "@/components/telemedicine-facility-active-visits"
+import { ChevronLeft, ChevronRight, LayoutList, Loader2, RefreshCw, Settings, Video } from "lucide-react"
+import { cn } from "@/lib/utils"
+import {
+  TelemedicineFacilityActiveVisits,
+  type TelemedicineFacilityActiveVisitsHandle,
+} from "@/components/telemedicine-facility-active-visits"
 import { TelemedicineMeetingLinkActions } from "@/components/telemedicine-meeting-link-actions"
-import { TelemedicineHelpLink } from "@/components/telemedicine-help-link"
 
 const PAGE_SIZE = 25
 
@@ -26,6 +29,8 @@ export default function TelemedicineHubPage() {
   const [total, setTotal] = useState(0)
   /** Bumped when an active visit ends so “All sessions” refetches. */
   const [allSessionsVersion, setAllSessionsVersion] = useState(0)
+  const activeVisitsRef = useRef<TelemedicineFacilityActiveVisitsHandle | null>(null)
+  const [activeVisitsRefreshBusy, setActiveVisitsRefreshBusy] = useState(false)
 
   useLayoutEffect(() => {
     if (tab === "all") setAllSessionsLoading(true)
@@ -82,13 +87,6 @@ export default function TelemedicineHubPage() {
             <Video className="h-7 w-7" />
             Telemedicine
           </h1>
-          <p className="text-muted-foreground text-sm mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span>
-              <strong className="font-medium text-foreground">Current visits</strong> for the live board;{" "}
-              <strong className="font-medium text-foreground">All sessions</strong> lists active and ended visits, newest first.
-            </span>
-            <TelemedicineHelpLink />
-          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" asChild>
@@ -112,32 +110,46 @@ export default function TelemedicineHubPage() {
         >
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">Facility telemedicine</CardTitle>
-            <CardDescription className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span>One place for the live visit board and the full facility list.</span>
-              <TelemedicineHelpLink />
-            </CardDescription>
-            <TabsList className="mt-3 grid h-auto w-full max-w-2xl grid-cols-2 gap-1 p-1">
-              <TabsTrigger value="current" className="gap-2 py-2.5">
-                <Video className="h-4 w-4 shrink-0" />
-                Current visits
-              </TabsTrigger>
-              <TabsTrigger value="all" className="gap-2 py-2.5">
-                <LayoutList className="h-4 w-4 shrink-0" />
-                All sessions
-              </TabsTrigger>
-            </TabsList>
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-stretch sm:justify-between sm:gap-3">
+              <TabsList className="grid h-auto w-full max-w-2xl flex-1 grid-cols-2 gap-1 p-1 sm:min-w-0">
+                <TabsTrigger value="current" className="gap-2 py-2.5">
+                  <Video className="h-4 w-4 shrink-0" />
+                  Current visits
+                </TabsTrigger>
+                <TabsTrigger value="all" className="gap-2 py-2.5">
+                  <LayoutList className="h-4 w-4 shrink-0" />
+                  All sessions
+                </TabsTrigger>
+              </TabsList>
+              {tab === "current" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-auto shrink-0 self-stretch px-3 sm:self-auto sm:py-2"
+                  disabled={activeVisitsRefreshBusy}
+                  onClick={() => {
+                    setActiveVisitsRefreshBusy(true)
+                    void Promise.resolve(activeVisitsRef.current?.refresh()).finally(() => setActiveVisitsRefreshBusy(false))
+                  }}
+                >
+                  <RefreshCw className={cn("mr-2 h-4 w-4", activeVisitsRefreshBusy && "animate-spin")} />
+                  Refresh
+                </Button>
+              ) : null}
+            </div>
           </CardHeader>
 
           <CardContent className="pt-0">
             <TabsContent value="current" className="mt-0 outline-none focus-visible:ring-0">
-              <TelemedicineFacilityActiveVisits onVisitEnded={() => setAllSessionsVersion((n) => n + 1)} />
+              <TelemedicineFacilityActiveVisits
+                ref={activeVisitsRef}
+                hideToolbarRefresh
+                onVisitEnded={() => setAllSessionsVersion((n) => n + 1)}
+              />
             </TabsContent>
 
             <TabsContent value="all" className="mt-0 outline-none focus-visible:ring-0 space-y-3">
-              <p className="text-sm text-muted-foreground">
-                Active and ended sessions for your facility, ordered by <strong className="font-medium text-foreground">created date</strong> (newest
-                first).
-              </p>
               {allSessionsLoading ? (
                 <div className="flex justify-center py-12 text-muted-foreground">
                   <Loader2 className="h-8 w-8 animate-spin" />

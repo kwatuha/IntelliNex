@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from "react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,16 +26,25 @@ function humanizeStatus(status: string | undefined) {
   return status.replace(/_/g, " ")
 }
 
+export type TelemedicineFacilityActiveVisitsHandle = {
+  refresh: () => Promise<void>
+}
+
 type Props = {
   className?: string
   /** Called after a visit is ended so the parent can refresh “All sessions”. */
   onVisitEnded?: () => void
+  /** When true, omit the top “Refresh” row (parent renders refresh beside tabs). */
+  hideToolbarRefresh?: boolean
 }
 
 /**
  * Facility-wide **active** telemedicine visits (cards with join + end). Used inside the hub “Current visits” tab.
  */
-export function TelemedicineFacilityActiveVisits({ className, onVisitEnded }: Props) {
+export const TelemedicineFacilityActiveVisits = forwardRef<TelemedicineFacilityActiveVisitsHandle, Props>(function TelemedicineFacilityActiveVisits(
+  { className, onVisitEnded, hideToolbarRefresh = false },
+  ref,
+) {
   const { toast } = useToast()
   const [loading, setLoading] = useState(true)
   const [sessions, setSessions] = useState<any[]>([])
@@ -69,6 +78,14 @@ export function TelemedicineFacilityActiveVisits({ className, onVisitEnded }: Pr
     void load()
   }, [load])
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      refresh: () => load(),
+    }),
+    [load],
+  )
+
   const handleEndSession = async () => {
     if (!endConfirmId) return
     try {
@@ -95,12 +112,14 @@ export function TelemedicineFacilityActiveVisits({ className, onVisitEnded }: Pr
   return (
     <>
       <div className={cn("space-y-4", className)}>
-        <div className="flex justify-end">
-          <Button type="button" variant="outline" size="sm" onClick={() => void load()} disabled={loading} className="shrink-0">
-            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
-        </div>
+        {!hideToolbarRefresh ? (
+          <div className="flex justify-end">
+            <Button type="button" variant="outline" size="sm" onClick={() => void load()} disabled={loading} className="shrink-0">
+              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </div>
+        ) : null}
 
         {loading ? (
           <div className="flex justify-center py-10 text-muted-foreground">
@@ -198,4 +217,6 @@ export function TelemedicineFacilityActiveVisits({ className, onVisitEnded }: Pr
       </AlertDialog>
     </>
   )
-}
+})
+
+TelemedicineFacilityActiveVisits.displayName = "TelemedicineFacilityActiveVisits"

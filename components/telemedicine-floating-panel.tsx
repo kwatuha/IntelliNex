@@ -13,6 +13,7 @@ import { ExternalLink, Minus, Video, X } from "lucide-react"
  * (`flex-row-reverse`), those panels opened into the seam beside the encounter column and were clipped or hidden.
  * On small screens the encounter panel stacks below the video.
  *
+ * Full-bleed horizontally and to the bottom (`inset-x-0 bottom-0`); small top inset only so the dock covers layout chrome except a thin top margin.
  * z-[100] sits below portaled modals (Dialog z~140+, Sheet z~130+). Do not raise above ~120 without bumping those layers.
  * Video column uses a higher stacking order than the encounter column so Zoom iframe UI is not covered by the encounter card.
  */
@@ -41,11 +42,11 @@ export function TelemedicineFloatingPanel() {
 
   return (
     <div
-      className="fixed bottom-4 left-3 right-3 z-[100] flex h-[min(90vh,880px)] max-h-[min(94vh,960px)] min-h-0 flex-col gap-2 overflow-hidden sm:left-4 sm:right-4 lg:flex-row lg:items-stretch"
+      className="fixed inset-x-0 bottom-0 top-1 z-[100] flex min-h-0 flex-col gap-0 overflow-hidden bg-background sm:top-2 lg:flex-row lg:items-stretch"
       role="dialog"
       aria-label="Telemedicine session and encounter"
     >
-      <div className="relative z-[5] flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden rounded-lg border bg-background shadow-2xl ring-1 ring-border animate-in slide-in-from-bottom-4 fade-in-0 duration-200 lg:min-w-[min(50%,360px)] lg:max-w-none lg:flex-[1.25]">
+      <div className="relative z-[5] flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden border-b border-border bg-background shadow-2xl animate-in slide-in-from-bottom-4 fade-in-0 duration-200 lg:min-w-[min(50%,360px)] lg:max-w-none lg:flex-[1.25] lg:border-b-0 lg:border-r">
         <div className="flex shrink-0 items-center justify-between gap-2 border-b bg-muted/40 px-2 py-1.5">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <Video className="h-4 w-4 shrink-0 text-primary" />

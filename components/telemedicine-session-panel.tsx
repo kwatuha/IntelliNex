@@ -197,6 +197,19 @@ export function TelemedicineSessionPanel({
     return true
   }, [patientConsentGranted, guardianConsentGranted, guardianConsentRequired])
 
+  /** Must run before any conditional return (Rules of Hooks). */
+  const zoomSdkRole = useMemo<"0" | "1">(() => {
+    const s = String(session?.zoomJoinUrl || "").trim()
+    const d = String(myDefaultZoomJoinUrl || "").trim()
+    if (!s || !d) return "1"
+    return zoomMeetingUrlsMatch(s, d) ? "1" : "0"
+  }, [session?.zoomJoinUrl, myDefaultZoomJoinUrl])
+
+  const zoomLinkMatchesDefault = useMemo(
+    () => zoomMeetingUrlsMatch(session?.zoomJoinUrl, myDefaultZoomJoinUrl),
+    [session?.zoomJoinUrl, myDefaultZoomJoinUrl],
+  )
+
   const handleApplyMyDefaults = async () => {
     if (!isZoomProvider(session?.provider as string)) {
       toast({
@@ -343,18 +356,6 @@ export function TelemedicineSessionPanel({
   const videoProviderId = (session.provider as string) || "zoom_manual"
 
   const hasLink = !!(session.zoomJoinUrl || zoomJoinUrl.trim())
-
-  const zoomSdkRole = useMemo<"0" | "1">(() => {
-    const s = String(session.zoomJoinUrl || "").trim()
-    const d = String(myDefaultZoomJoinUrl || "").trim()
-    if (!s || !d) return "1"
-    return zoomMeetingUrlsMatch(s, d) ? "1" : "0"
-  }, [session.zoomJoinUrl, myDefaultZoomJoinUrl])
-
-  const zoomLinkMatchesDefault = useMemo(
-    () => zoomMeetingUrlsMatch(session.zoomJoinUrl, myDefaultZoomJoinUrl),
-    [session.zoomJoinUrl, myDefaultZoomJoinUrl],
-  )
 
   const wrapperClass = isFloating ? "flex min-h-0 min-w-0 h-full flex-col text-sm" : "max-w-3xl mx-auto space-y-4"
 

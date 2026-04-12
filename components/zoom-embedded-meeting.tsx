@@ -483,7 +483,7 @@ export function ZoomEmbeddedMeeting({
       {phase === "loading" && (
         <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-background/85 px-3 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
-          Loading Zoom Meeting SDK…
+          Loading Session...
         </div>
       )}
       <iframe

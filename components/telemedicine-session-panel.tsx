@@ -23,8 +23,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { ChevronDown, MoreHorizontal, Video, VideoOff } from "lucide-react"
+import { ZoomMeetingInfoPopover } from "@/components/zoom-meeting-info-popover"
 import { cn } from "@/lib/utils"
 import { useTelemedicineFloating } from "@/lib/telemedicine-floating-context"
+import { zoomMeetingUrlsMatch } from "@/lib/zoom-url-utils"
 
 const ZoomEmbeddedMeeting = dynamic(
   () => import("@/components/zoom-embedded-meeting").then((m) => m.ZoomEmbeddedMeeting),
@@ -342,6 +344,18 @@ export function TelemedicineSessionPanel({
 
   const hasLink = !!(session.zoomJoinUrl || zoomJoinUrl.trim())
 
+  const zoomSdkRole = useMemo<"0" | "1">(() => {
+    const s = String(session.zoomJoinUrl || "").trim()
+    const d = String(myDefaultZoomJoinUrl || "").trim()
+    if (!s || !d) return "1"
+    return zoomMeetingUrlsMatch(s, d) ? "1" : "0"
+  }, [session.zoomJoinUrl, myDefaultZoomJoinUrl])
+
+  const zoomLinkMatchesDefault = useMemo(
+    () => zoomMeetingUrlsMatch(session.zoomJoinUrl, myDefaultZoomJoinUrl),
+    [session.zoomJoinUrl, myDefaultZoomJoinUrl],
+  )
+
   const wrapperClass = isFloating ? "flex min-h-0 min-w-0 h-full flex-col text-sm" : "max-w-3xl mx-auto space-y-4"
 
   const meetingDetailsInner = (
@@ -507,10 +521,27 @@ export function TelemedicineSessionPanel({
                 </Alert>
               )}
 
-              <div className="flex shrink-0 items-center gap-0.5 border-b border-border/30 pb-1">
+              <div className="flex min-h-0 shrink-0 items-center gap-1 overflow-x-auto border-b border-border/30 py-1">
                 <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px] font-normal" title="Session status">
                   {session.status}
                 </Badge>
+                {isZoomProvider(videoProviderId) &&
+                  sdkEmbedConfigured &&
+                  hasLink &&
+                  showEmbeddedZoom &&
+                  session.status !== "ended" && (
+                    <Badge
+                      variant={zoomSdkRole === "1" ? "default" : "secondary"}
+                      className="h-5 shrink-0 px-1.5 text-[10px] font-normal"
+                      title={
+                        zoomLinkMatchesDefault
+                          ? "Meeting SDK role: same meeting id as My Zoom defaults → host"
+                          : "Meeting SDK role: session link differs from your saved default → participant"
+                      }
+                    >
+                      {zoomSdkRole === "1" ? "Host" : "Participant"}
+                    </Badge>
+                  )}
                 <div className="min-w-0 flex-1" aria-hidden />
                 <div className="flex shrink-0 items-center gap-px">
                   {isZoomProvider(videoProviderId) && sdkEmbedConfigured && hasLink && session.status !== "ended" && (
@@ -552,6 +583,11 @@ export function TelemedicineSessionPanel({
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
+                  {isZoomProvider(videoProviderId) &&
+                    sdkEmbedConfigured &&
+                    hasLink &&
+                    showEmbeddedZoom &&
+                    session.status !== "ended" && <ZoomMeetingInfoPopover />}
                 </div>
               </div>
 
@@ -561,6 +597,7 @@ export function TelemedicineSessionPanel({
                     sessionId={sessionId}
                     compact
                     minimalChrome
+                    hideMinimalTopBar
                     sessionZoomJoinUrl={session?.zoomJoinUrl ?? null}
                     defaultZoomJoinUrl={myDefaultZoomJoinUrl}
                   />

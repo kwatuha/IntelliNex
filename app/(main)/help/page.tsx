@@ -71,7 +71,7 @@ function HelpPageContent() {
                   There is <strong>one active HMIS telemedicine session per patient</strong>. Everyone joins that same session. The meeting URL
                   appears on the facility board after it is saved—for <strong>Zoom</strong> that may happen automatically from{" "}
                   <strong>My Zoom defaults</strong> (or an optional link when starting); otherwise the clinician pastes the link in the visit
-                  panel first. Use <strong>Join in HMIS</strong> for the session panel (consent, documentation, optional embedded video) and the
+                  panel first. Use <strong>Join Session</strong> to open the session panel (consent, documentation, optional embedded video) and the
                   stored meeting link on the board.
                 </p>
               </section>
@@ -89,7 +89,7 @@ function HelpPageContent() {
                 <h3 className="font-semibold text-base text-foreground">Starting vs joining</h3>
                 <p className="text-muted-foreground">
                   <strong>Starting a new visit</strong> requires saved <strong>My Zoom defaults</strong> (join URL + optional passcode) when
-                  your workflow uses that. <strong>Joining</strong> a visit someone else started uses <strong>Join in HMIS</strong> on the
+                  your workflow uses that. <strong>Joining</strong> a visit someone else started uses <strong>Join Session</strong> on the
                   board—no defaults needed.
                 </p>
               </section>

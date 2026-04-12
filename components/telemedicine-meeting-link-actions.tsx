@@ -11,14 +11,14 @@ type Props = {
   zoomJoinUrl: string | null | undefined
   /** Tighter layout for table cells */
   compact?: boolean
-  /** Hide "Join in HMIS" (e.g. on static marketing page) */
+  /** Hide "Join Session" (e.g. on static marketing page) */
   hideOpenInPanel?: boolean
-  /** Hide the read-only URL field — Copy link / Join in HMIS still use the URL. */
+  /** Hide the read-only URL field — Copy link / Join Session still use the URL. */
   hideMeetingLinkField?: boolean
 }
 
 /**
- * Shows the stored meeting URL in a copy-friendly field plus Join in HMIS (floating panel) and Copy link.
+ * Shows the stored meeting URL in a copy-friendly field plus Join Session (floating panel) and Copy link.
  */
 export function TelemedicineMeetingLinkActions({
   sessionId,
@@ -61,7 +61,7 @@ export function TelemedicineMeetingLinkActions({
         {!hideOpenInPanel && (
           <Button type="button" variant="secondary" size={compact ? "sm" : "default"} className={compact ? "h-8 text-xs" : ""} onClick={joinInApp}>
             <PanelRightOpen className="h-3.5 w-3.5 mr-1.5" />
-            Join in HMIS
+            Join Session
           </Button>
         )}
       </div>
@@ -89,10 +89,10 @@ export function TelemedicineMeetingLinkActions({
             size={compact ? "sm" : "default"}
             className={compact ? "h-8 text-xs" : ""}
             onClick={joinInApp}
-            title="Open consent & link panel inside HMIS (same session)"
+            title="Open telemedicine session panel (consent, link, same visit)"
           >
             <PanelRightOpen className="h-3.5 w-3.5 mr-1.5" />
-            Join in HMIS
+            Join Session
           </Button>
         )}
         <Button type="button" variant="outline" size={compact ? "sm" : "default"} className={compact ? "h-8 text-xs" : ""} onClick={() => void copy()}>

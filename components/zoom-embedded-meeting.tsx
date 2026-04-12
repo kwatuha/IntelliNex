@@ -10,9 +10,9 @@ import { TelemedicineHelpLink } from "@/components/telemedicine-help-link"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { ZoomMeetingInfoPopover } from "@/components/zoom-meeting-info-popover"
 import { zoomMeetingUrlsMatch } from "@/lib/zoom-url-utils"
-import { Info, Loader2 } from "lucide-react"
+import { Loader2 } from "lucide-react"
 
 export type ZoomEmbeddedMeetingProps = {
   sessionId: string
@@ -28,6 +28,11 @@ export type ZoomEmbeddedMeetingProps = {
   sessionZoomJoinUrl?: string | null
   /** Signed-in user’s “My Zoom defaults” URL — same meeting id as session → Host. */
   defaultZoomJoinUrl?: string | null
+  /**
+   * When `minimalChrome` is true, skip the inner Host / tips toolbar so the parent can render one combined row
+   * (e.g. floating session panel).
+   */
+  hideMinimalTopBar?: boolean
 }
 
 /** Zoom reports whether this browser can use audio/video/screen (iframe path: not measured here). */
@@ -178,6 +183,7 @@ export function ZoomEmbeddedMeeting({
   className,
   sessionZoomJoinUrl,
   defaultZoomJoinUrl,
+  hideMinimalTopBar = false,
 }: ZoomEmbeddedMeetingProps) {
   const { user } = useAuth()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -412,27 +418,7 @@ export function ZoomEmbeddedMeeting({
           {sdkRole === "1" ? "Host" : "Participant"}
         </Badge>
       </div>
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0" title="Zoom tips">
-            <Info className="h-3.5 w-3.5" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-[min(100vw-2rem,20rem)] space-y-2 text-xs" align="start">
-          <p className="leading-relaxed text-muted-foreground">
-            The preview is sized so Zoom&apos;s bottom controls usually fit without scrolling. The frame is <strong className="text-foreground">16:9</strong>. HMIS uses the <strong className="text-foreground">embedded Meeting SDK</strong> — no separate “waiting room” page. If the bar is still hidden, open the visit on the <strong className="text-foreground">full session page</strong> or <strong className="text-foreground">minimize</strong> this dock.
-          </p>
-          <p className="leading-relaxed text-muted-foreground">
-            If Zoom shows an <strong className="text-foreground">apps or integrations</strong> notice, that is Zoom platform transparency — not an HMIS alert. Give the dock more room or use full page so the in-meeting toolbar stays visible.
-          </p>
-          <p className="text-[11px] text-muted-foreground">
-            <strong className="text-foreground">Host</strong> vs <strong className="text-foreground">Participant</strong> is the Zoom Meeting SDK
-            join role in the signed token. HMIS infers it from your session link vs <strong className="text-foreground">My Zoom defaults</strong> and
-            shows it on the badge (hover for detail).
-          </p>
-          <TelemedicineHelpLink />
-        </PopoverContent>
-      </Popover>
+      <ZoomMeetingInfoPopover />
     </div>
   )
 
@@ -531,7 +517,7 @@ export function ZoomEmbeddedMeeting({
           <AlertDescription className="text-xs leading-relaxed">
             This page is <strong className="font-medium">not a secure context</strong> ({mediaEnv.hostname ? `http://${mediaEnv.hostname}…` : "HTTP"}). Browsers do not expose camera/microphone there, so the Meeting SDK cannot run video/audio and Zoom may say to “upgrade your browser”—that message is misleading. Serve HMIS over{" "}
             <strong className="font-medium">HTTPS</strong> (e.g. nginx or Caddy with a certificate) or test embedded video at{" "}
-            <strong className="font-medium">http://localhost</strong>. If you must stay on HTTP, use <strong className="font-medium">Join in HMIS</strong>{" "}
+            <strong className="font-medium">http://localhost</strong>. If you must stay on HTTP, use <strong className="font-medium">Join Session</strong>{" "}
             on the telemedicine board and <strong className="font-medium">Copy link</strong> (or your vendor app) instead of embedded video here.
           </AlertDescription>
         </Alert>
@@ -540,7 +526,7 @@ export function ZoomEmbeddedMeeting({
       {minimalChrome ? (
         <>
           {errorAlert}
-          {compactTopBar}
+          {!hideMinimalTopBar && compactTopBar}
           <div className="flex min-h-0 w-full min-w-0 flex-1 flex-col">
             {videoShell}
           </div>

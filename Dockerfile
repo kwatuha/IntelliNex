@@ -5,29 +5,25 @@ FROM node:18
 # Set working directory
 WORKDIR /app
 
-# Install dependencies first (better caching)
-# Copy only package files first for better layer caching
-COPY package*.json ./
-
-# Clean npm cache and install dependencies
-RUN npm cache clean --force && \
-    npm install --legacy-peer-deps
-
-# Copy application code
+# Copy application code. Dependencies are installed by the entrypoint at
+# container startup because docker-compose mounts node_modules as a volume.
 COPY . .
 
-# Create a non-root user for Next.js
-RUN groupadd -r appuser && useradd -r -g appuser -u 1001 appuser
+# Create a non-root user for Next.js. npm needs a writable home/cache
+# when dependencies are installed by the runtime entrypoint.
+RUN groupadd -r appuser && useradd -m -d /home/appuser -r -g appuser -u 1001 appuser
+ENV HOME=/home/appuser
+ENV NPM_CONFIG_CACHE=/home/appuser/.npm
 
 # Copy entrypoint script (for development hot-reload support)
 COPY docker-entrypoint-frontend.sh /usr/local/bin/docker-entrypoint-frontend.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint-frontend.sh
 
-# Create a wrapper script that fixes .next permissions before switching users
+# Create a wrapper script that fixes mounted volume permissions before switching users
 RUN echo '#!/bin/sh\n\
-if [ -d "/app/.next" ]; then\n\
-    chown -R appuser:appuser /app/.next 2>/dev/null || true\n\
-fi\n\
+mkdir -p /app/node_modules /app/.next\n\
+mkdir -p /home/appuser/.npm\n\
+chown -R appuser:appuser /app/node_modules /app/.next /home/appuser 2>/dev/null || true\n\
 exec gosu appuser /usr/local/bin/docker-entrypoint-frontend.sh "$@"' > /usr/local/bin/entrypoint-wrapper.sh && \
     chmod +x /usr/local/bin/entrypoint-wrapper.sh
 
@@ -46,6 +42,5 @@ EXPOSE 3000
 # Use wrapper entrypoint that fixes permissions before switching users
 ENTRYPOINT ["/usr/local/bin/entrypoint-wrapper.sh"]
 
-# Start Next.js development server with Turbo mode for faster compilation
-# Turbo mode significantly speeds up page compilation and hot reloading
-CMD ["npm", "run", "dev"]
+# Start Next.js on the container port that docker-compose publishes.
+CMD ["npx", "next", "dev", "--turbo", "-H", "0.0.0.0", "-p", "3000"]

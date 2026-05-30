@@ -1,8 +1,8 @@
 -- Kiplombe Medical Centre HMIS Database Schema
 -- MySQL 8.0+
 
-CREATE DATABASE IF NOT EXISTS kiplombe_hmis CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE kiplombe_hmis;
+CREATE DATABASE IF NOT EXISTS intellinex_hmis_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE intellinex_hmis_db;
 
 -- ============================================
 -- ROLES AND PRIVILEGES
@@ -63,6 +63,27 @@ CREATE TABLE IF NOT EXISTS users (
     INDEX idx_username (username),
     INDEX idx_email (email),
     INDEX idx_role (roleId)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Insurance providers are referenced by patients; keep the provider catalog in
+-- the base schema so a fresh database can initialize before module schemas run.
+CREATE TABLE IF NOT EXISTS insurance_providers (
+    providerId INT NOT NULL AUTO_INCREMENT,
+    providerCode VARCHAR(50) UNIQUE,
+    providerName VARCHAR(200) NOT NULL,
+    contactPerson VARCHAR(200),
+    phone VARCHAR(20),
+    email VARCHAR(100),
+    address TEXT,
+    claimsAddress TEXT,
+    website VARCHAR(200),
+    isActive BOOLEAN DEFAULT TRUE,
+    notes TEXT,
+    createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (providerId),
+    INDEX idx_provider_code (providerCode),
+    INDEX idx_provider_name (providerName)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================
@@ -330,9 +351,9 @@ ON DUPLICATE KEY UPDATE roleName=roleName;
 -- Insert default admin user (password: admin123)
 -- Password hash for 'admin123' using bcrypt (salt rounds: 10)
 -- To generate: bcrypt.hash('admin123', 10)
--- This hash is for 'admin123': $2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy
+-- This hash is for 'admin123': $2a$10$Bh4D5wLo7y8SUR2iRpWqb./mhRvXj0jF9vLfytXi9KYEthcgPNid2
 INSERT INTO users (username, email, passwordHash, firstName, lastName, roleId, department, isActive) VALUES
-('admin', 'admin@kiplombe.com', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'System', 'Administrator',
+('admin', 'admin@kiplombe.com', '$2a$10$Bh4D5wLo7y8SUR2iRpWqb./mhRvXj0jF9vLfytXi9KYEthcgPNid2', 'System', 'Administrator',
  (SELECT roleId FROM roles WHERE roleName = 'admin'), 'IT', TRUE)
 ON DUPLICATE KEY UPDATE username=username;
 

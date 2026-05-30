@@ -2676,7 +2676,15 @@ const clearDraftFromStorage = (patientId:any) => {
   return (
     <>
       <Dialog open={open} onOpenChange={handleDialogClose}>
-        <DialogContent className="sm:max-w-[95vw] max-w-[95vw] h-[95vh] max-h-[95vh] overflow-hidden flex flex-col p-0">
+        <DialogContent
+          className="sm:max-w-[95vw] max-w-[95vw] h-[95vh] max-h-[95vh] overflow-hidden flex flex-col p-0"
+          onInteractOutside={(event) => {
+            const target = event.target as HTMLElement | null
+            if (target?.closest("[data-radix-popper-content-wrapper], [data-encounter-layer]")) {
+              event.preventDefault()
+            }
+          }}
+        >
           <DialogTitle className="sr-only">Patient Encounter</DialogTitle>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="flex-1 flex flex-col overflow-hidden min-h-0">
@@ -3496,7 +3504,7 @@ const clearDraftFromStorage = (patientId:any) => {
 
       {/* Lab Tests Sheet */}
       <Sheet open={labTestsSheetOpen} onOpenChange={setLabTestsSheetOpen}>
-        <SheetContent side="right" className="w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
+        <SheetContent data-encounter-layer side="right" overlayClassName="!z-[142]" className="!z-[143] w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
           <Form {...form}>
             <SheetHeader className="px-6 pt-6 pb-4 border-b flex-shrink-0">
               <SheetTitle className="flex items-center gap-2">
@@ -3675,7 +3683,7 @@ const clearDraftFromStorage = (patientId:any) => {
 
       {/* Symptoms Sheet */}
       <Sheet open={symptomsSheetOpen} onOpenChange={setSymptomsSheetOpen}>
-        <SheetContent side="right" className="w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
+        <SheetContent data-encounter-layer side="right" overlayClassName="!z-[142]" className="!z-[143] w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
           <Form {...form}>
             <SheetHeader className="px-6 pt-6 pb-4 border-b flex-shrink-0">
               <SheetTitle className="flex items-center gap-2">
@@ -3831,7 +3839,7 @@ const clearDraftFromStorage = (patientId:any) => {
 
       {/* Diagnosis Sheet */}
       <Sheet open={diagnosisSheetOpen} onOpenChange={setDiagnosisSheetOpen}>
-        <SheetContent side="right" className="w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
+        <SheetContent data-encounter-layer side="right" overlayClassName="!z-[142]" className="!z-[143] w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
           <Form {...form}>
             <SheetHeader className="px-6 pt-6 pb-4 border-b flex-shrink-0">
               <SheetTitle className="flex items-center gap-2">
@@ -4170,7 +4178,7 @@ const clearDraftFromStorage = (patientId:any) => {
 
       {/* Prescription Sheet */}
       <Sheet open={prescriptionSheetOpen} onOpenChange={setPrescriptionSheetOpen}>
-        <SheetContent side="right" className="w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
+        <SheetContent data-encounter-layer side="right" overlayClassName="!z-[142]" className="!z-[143] w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
           <Form {...form}>
             <SheetHeader className="px-6 pt-6 pb-4 border-b flex-shrink-0">
               <SheetTitle className="flex items-center gap-2">
@@ -4353,7 +4361,7 @@ const clearDraftFromStorage = (patientId:any) => {
 
       {/* Procedures Sheet */}
       <Sheet open={proceduresSheetOpen} onOpenChange={setProceduresSheetOpen}>
-        <SheetContent side="right" className="w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
+        <SheetContent data-encounter-layer side="right" overlayClassName="!z-[142]" className="!z-[143] w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
           <SheetHeader className="px-6 pt-6 pb-4 border-b flex-shrink-0">
             <SheetTitle className="flex items-center gap-2">
               <Stethoscope className="h-5 w-5" />
@@ -4464,7 +4472,7 @@ const clearDraftFromStorage = (patientId:any) => {
 
       {/* Radiology Sheet */}
       <Sheet open={radiologySheetOpen} onOpenChange={setRadiologySheetOpen}>
-        <SheetContent side="right" className="w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
+        <SheetContent data-encounter-layer side="right" overlayClassName="!z-[142]" className="!z-[143] w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
           <SheetHeader className="px-6 pt-6 pb-4 border-b flex-shrink-0">
             <SheetTitle className="flex items-center gap-2">
               <Scan className="h-5 w-5" />
@@ -4589,7 +4597,7 @@ const clearDraftFromStorage = (patientId:any) => {
 
       {/* Orders/Consumables Sheet */}
       <Sheet open={ordersSheetOpen} onOpenChange={setOrdersSheetOpen}>
-        <SheetContent side="right" className="w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
+        <SheetContent data-encounter-layer side="right" overlayClassName="!z-[142]" className="!z-[143] w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
           <SheetHeader className="px-6 pt-6 pb-4 border-b flex-shrink-0">
             <SheetTitle className="flex items-center gap-2">
               <Package className="h-5 w-5" />
@@ -4800,7 +4808,7 @@ const clearDraftFromStorage = (patientId:any) => {
 
       {/* History Sheet */}
       <Sheet open={historySheetOpen} onOpenChange={setHistorySheetOpen}>
-        <SheetContent side="right" className="w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
+        <SheetContent data-encounter-layer side="right" overlayClassName="!z-[142]" className="!z-[143] w-full sm:w-[90vw] sm:max-w-5xl p-0 flex flex-col overflow-hidden">
           <SheetHeader className="px-6 pt-6 pb-4 border-b flex-shrink-0">
             <SheetTitle className="flex items-center gap-2">
               <History className="h-5 w-5" />
@@ -4906,7 +4914,7 @@ const clearDraftFromStorage = (patientId:any) => {
 
       {/* Add/Edit Medication Dialog */}
       <Dialog open={addMedicationDialogOpen} onOpenChange={setAddMedicationDialogOpen}>
-        <DialogContent className="sm:max-w-[600px] z-[121]" overlayClassName="z-[120]">
+        <DialogContent data-encounter-layer className="sm:max-w-[600px] z-[161]" overlayClassName="z-[160]">
           <DialogHeader>
             <DialogTitle>
               {editingMedicationIndex !== null ? "Edit Medication" : "Add Medication"}
@@ -5255,7 +5263,7 @@ const clearDraftFromStorage = (patientId:any) => {
 
       {/* Add/Edit Lab Test Dialog */}
       <Dialog open={addTestDialogOpen} onOpenChange={setAddTestDialogOpen}>
-        <DialogContent className="sm:max-w-[500px] z-[121]" overlayClassName="z-[120]">
+        <DialogContent data-encounter-layer className="sm:max-w-[500px] z-[161]" overlayClassName="z-[160]">
           <DialogHeader>
             <DialogTitle>
               {editingLabTestIndex !== null ? "Edit Lab Test" : "Add Lab Test"}
@@ -5431,7 +5439,7 @@ const clearDraftFromStorage = (patientId:any) => {
 
       {/* Add/Edit Radiology Order Dialog */}
       <Dialog open={addRadiologyDialogOpen} onOpenChange={setAddRadiologyDialogOpen}>
-        <DialogContent className="sm:max-w-[640px] z-[121] max-h-[90vh] overflow-y-auto" overlayClassName="z-[120]">
+        <DialogContent data-encounter-layer className="sm:max-w-[640px] z-[161] max-h-[90vh] overflow-y-auto" overlayClassName="z-[160]">
           <DialogHeader>
             <DialogTitle>
               {editingRadiologyIndex !== null ? "Edit Radiology Order" : "Add Radiology Order"}
@@ -5644,7 +5652,7 @@ const clearDraftFromStorage = (patientId:any) => {
           setTempProcedure(defaultProcedure)
         }
       }}>
-        <DialogContent className="sm:max-w-[600px] z-[121]" overlayClassName="z-[120]">
+        <DialogContent data-encounter-layer className="sm:max-w-[600px] z-[161]" overlayClassName="z-[160]">
           <DialogHeader>
             <DialogTitle>
               {editingProcedureIndex !== null ? "Edit Procedure" : "Add Procedure"}
@@ -6014,7 +6022,7 @@ const clearDraftFromStorage = (patientId:any) => {
 
       {/* Add/Edit Order Dialog */}
       <Dialog open={addOrderDialogOpen} onOpenChange={setAddOrderDialogOpen}>
-        <DialogContent className="sm:max-w-[600px] z-[121]" overlayClassName="z-[120]">
+        <DialogContent data-encounter-layer className="sm:max-w-[600px] z-[161]" overlayClassName="z-[160]">
           <DialogHeader>
             <DialogTitle>
               {editingOrderIndex !== null ? "Edit Order" : "Add Order"}

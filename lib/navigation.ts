@@ -149,6 +149,13 @@ export const navigationCategories: NavigationCategory[] = [
         group: "Outpatient & diagnostics",
       },
       {
+        title: "Chemist Referrals",
+        icon: Store,
+        href: "/chemist/referrals",
+        description: "External chemist portal for referred prescriptions",
+        group: "Outpatient & diagnostics",
+      },
+      {
         title: "Laboratory",
         icon: FlaskConical,
         href: "/laboratory",
@@ -367,6 +374,11 @@ export const navigationCategories: NavigationCategory[] = [
         title: "Drug Stores",
         icon: Store,
         href: "/settings/drug-stores",
+      },
+      {
+        title: "External Chemists",
+        icon: Store,
+        href: "/settings/external-chemists",
       },
     ],
   },

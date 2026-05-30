@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { MapPin, Building2, ArrowRight } from "lucide-react"
+import { MapPin, ArrowRight, Store } from "lucide-react"
 
 export default function SettingsPage() {
   return (
@@ -172,6 +172,30 @@ export default function SettingsPage() {
                   <CardContent>
                     <p className="text-sm text-muted-foreground">
                       Create and manage hospital branches and drug stores. Set main branch and dispensing stores per branch.
+                    </p>
+                  </CardContent>
+                </Card>
+              </Link>
+
+              <Link href="/settings/external-chemists">
+                <Card className="cursor-pointer hover:bg-accent transition-colors">
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2 rounded-md bg-primary/10">
+                          <Store className="h-5 w-5 text-primary" />
+                        </div>
+                        <div>
+                          <CardTitle className="text-lg">External Chemists</CardTitle>
+                          <CardDescription>Register partner chemists and patient pickup locations</CardDescription>
+                        </div>
+                      </div>
+                      <ArrowRight className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-muted-foreground">
+                      Manage external chemists, geolocation details, contacts, and linked chemist login users.
                     </p>
                   </CardContent>
                 </Card>

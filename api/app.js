@@ -12,6 +12,7 @@ const queueRoutes = require('./routes/queueRoutes');
 const billingRoutes = require('./routes/billingRoutes');
 const inventoryRoutes = require('./routes/inventoryRoutes');
 const pharmacyRoutes = require('./routes/pharmacyRoutes');
+const externalChemistRoutes = require('./routes/externalChemistRoutes');
 const laboratoryRoutes = require('./routes/laboratoryRoutes');
 const radiologyRoutes = require('./routes/radiologyRoutes');
 const departmentRoutes = require('./routes/departmentRoutes');
@@ -158,6 +159,7 @@ app.use('/api/revenue-share', revenueShareRoutes);
 // IMPORTANT: More specific routes must come before generic routes
 app.use('/api/inventory/transactions', inventoryTransactionRoutes);
 app.use('/api/inventory', inventoryRoutes);
+app.use('/api/pharmacy', externalChemistRoutes);
 app.use('/api/pharmacy', pharmacyRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/laboratory', laboratoryRoutes);

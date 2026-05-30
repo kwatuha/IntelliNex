@@ -357,6 +357,44 @@ export const pharmacyApi = {
   createDispensation: (data: any) =>
     apiRequest<any>('/api/pharmacy/dispensations', { method: 'POST', body: data }),
 
+  // External chemists and prescription referrals
+  getExternalChemists: (search?: string, active?: boolean) => {
+    const params = new URLSearchParams()
+    if (search) params.append('search', search)
+    if (active !== undefined) params.append('active', String(active))
+    return apiRequest<any[]>(`/api/pharmacy/external-chemists?${params.toString()}`)
+  },
+
+  getExternalChemist: (id: string) =>
+    apiRequest<any>(`/api/pharmacy/external-chemists/${id}`),
+
+  createExternalChemist: (data: any) =>
+    apiRequest<any>('/api/pharmacy/external-chemists', { method: 'POST', body: data }),
+
+  updateExternalChemist: (id: string, data: any) =>
+    apiRequest<any>(`/api/pharmacy/external-chemists/${id}`, { method: 'PUT', body: data }),
+
+  getExternalReferrals: (filters?: { status?: string; chemistId?: string; patientId?: string; search?: string }) => {
+    const params = new URLSearchParams()
+    if (filters?.status) params.append('status', filters.status)
+    if (filters?.chemistId) params.append('chemistId', filters.chemistId)
+    if (filters?.patientId) params.append('patientId', filters.patientId)
+    if (filters?.search) params.append('search', filters.search)
+    return apiRequest<any[]>(`/api/pharmacy/external-referrals?${params.toString()}`)
+  },
+
+  createExternalReferral: (data: any) =>
+    apiRequest<any>('/api/pharmacy/external-referrals', { method: 'POST', body: data }),
+
+  updateExternalReferralStatus: (id: string, data: any) =>
+    apiRequest<any>(`/api/pharmacy/external-referrals/${id}/status`, { method: 'PATCH', body: data }),
+
+  updateExternalReferralItem: (referralId: string, referralItemId: string, data: any) =>
+    apiRequest<any>(`/api/pharmacy/external-referrals/${referralId}/items/${referralItemId}`, { method: 'PATCH', body: data }),
+
+  getCurrentChemist: () =>
+    apiRequest<any>('/api/pharmacy/chemist/me'),
+
   // Batch Traceability
   getBatchTrace: (batchNumber: string) =>
     apiRequest<any>(`/api/pharmacy/batch-trace/${batchNumber}`),

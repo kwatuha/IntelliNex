@@ -7,7 +7,7 @@ services:
     command: --default-authentication-plugin=mysql_native_password
     environment:
       MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: intellinex
+      MYSQL_DATABASE: intellinex_hmis_db
       MYSQL_USER: intellinex_user
       MYSQL_PASSWORD: intellinex_password
     volumes:
@@ -43,7 +43,7 @@ services:
       DB_HOST: mysql_db
       DB_USER: intellinex_user
       DB_PASSWORD: intellinex_password
-      DB_NAME: intellinex
+      DB_NAME: intellinex_hmis_db
       DB_PORT: 3306
       PORT: 3001
       APP_NAME: IntelliNex

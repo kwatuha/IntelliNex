@@ -19,6 +19,7 @@ import { DrugInventoryHistoryDialog } from "@/components/drug-inventory-history-
 import { StockAdjustmentForm } from "@/components/stock-adjustment-form"
 import { DispenseMedicationDialog } from "@/components/dispense-medication-dialog"
 import { NursePickup } from "@/components/nurse-pickup"
+import { ExternalReferrals } from "@/components/external-referrals"
 import { pharmacyApi } from "@/lib/api"
 import {
   DropdownMenu,
@@ -1386,6 +1387,7 @@ export default function PharmacyPage() {
           { value: "batch-trace", label: "Batch Trace" },
           { value: "drug-history", label: "Drug History" },
           { value: "nurse-pickup", label: "Nurse Pickup" },
+          { value: "external-referrals", label: "External Referrals" },
         ]}
         pagePath="/pharmacy"
         value={currentTab}
@@ -2140,6 +2142,10 @@ export default function PharmacyPage() {
 
         <TabsContent value="nurse-pickup" className="space-y-4 mt-4">
           <NursePickup />
+        </TabsContent>
+
+        <TabsContent value="external-referrals" className="space-y-4 mt-4">
+          <ExternalReferrals prescriptions={prescriptions} />
         </TabsContent>
       </RoleFilteredTabs>
 

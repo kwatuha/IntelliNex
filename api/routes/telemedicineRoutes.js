@@ -1077,14 +1077,17 @@ router.post('/sessions/:sessionId/zoom-sdk-signature', async (req, res) => {
 
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
-    const roleName = await getRoleNameByUserId(userId);
 
-    const [rows] = await pool.execute(
-      `SELECT ts.zoomJoinUrl, ts.zoomPassword, ts.doctorId, ts.provider, ts.status
-       FROM telemedicine_sessions ts
-       WHERE ts.sessionId = ?`,
-      [sessionId]
-    );
+    const [sessionQuery, roleName] = await Promise.all([
+      pool.execute(
+        `SELECT ts.zoomJoinUrl, ts.zoomPassword, ts.doctorId, ts.provider, ts.status
+         FROM telemedicine_sessions ts
+         WHERE ts.sessionId = ?`,
+        [sessionId],
+      ),
+      getRoleNameByUserId(userId),
+    ]);
+    const [rows] = sessionQuery;
     if (rows.length === 0) return res.status(404).json({ error: 'Session not found' });
 
     const s = rows[0];

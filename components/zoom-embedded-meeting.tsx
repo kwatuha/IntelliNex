@@ -149,6 +149,7 @@ function zoomDeploymentContextLine(): string {
   ].join(" | ")
 }
 
+/** Best-effort diagnostics only — called on join **failure** (not on the success path). */
 async function zoomProbeVendorReachability(diagnostics: string[]): Promise<void> {
   if (typeof window === "undefined") return
   const paths = [
@@ -158,17 +159,19 @@ async function zoomProbeVendorReachability(diagnostics: string[]): Promise<void>
     "/vendor/zoom-meetingsdk.css",
     "/zoom-embed-host.html",
   ] as const
-  for (const p of paths) {
-    const rel = publicAssetUrl(p)
-    const abs = new URL(rel, window.location.origin).href
-    try {
-      const r = await fetch(abs, { method: "HEAD", cache: "no-store" })
-      diagnostics.push(`vendor-probe HEAD ${p} -> ${r.status} abs:${abs}`)
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      diagnostics.push(`vendor-probe HEAD ${p} error:${msg} abs:${abs}`)
-    }
-  }
+  await Promise.all(
+    paths.map(async (p) => {
+      const rel = publicAssetUrl(p)
+      const abs = new URL(rel, window.location.origin).href
+      try {
+        const r = await fetch(abs, { method: "HEAD", cache: "no-store" })
+        diagnostics.push(`vendor-probe HEAD ${p} -> ${r.status} abs:${abs}`)
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        diagnostics.push(`vendor-probe HEAD ${p} error:${msg} abs:${abs}`)
+      }
+    }),
+  )
 }
 
 /**
@@ -267,9 +270,8 @@ export function ZoomEmbeddedMeeting({
       try {
         diagnostics.push(`embed-mode:iframe-react18-isolated src:${iframeSrc}`)
         diagnostics.push(zoomDeploymentContextLine())
-        await zoomProbeVendorReachability(diagnostics)
-
         diagnostics.push(`requested-role:${sdkRole}`)
+
         const data = await telemedicineApi.getZoomSdkSignature(sessionId, {
           role: Number(sdkRole) as 0 | 1,
         })
@@ -350,6 +352,12 @@ export function ZoomEmbeddedMeeting({
         }
       } catch (e: unknown) {
         if (stale()) return
+        /** Vendor HEAD probes are diagnostic-only — run on failure so successful joins avoid 5 extra requests. */
+        try {
+          await zoomProbeVendorReachability(diagnostics)
+        } catch {
+          /* ignore */
+        }
         const msg = stringifySdkError(e)
         const extra = diagnostics.length ? ` Diagnostics: ${diagnostics.join(" | ")}` : ""
         console.error("Zoom embed failure (iframe)", { message: msg, diagnostics, sessionId, sdkRole })

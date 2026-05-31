@@ -22,6 +22,7 @@ const emptyForm = {
 }
 
 export function ChemistUserManagement() {
+  const [scope, setScope] = useState<any>(null)
   const [users, setUsers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -33,13 +34,20 @@ export function ChemistUserManagement() {
     try {
       setLoading(true)
       setError(null)
-      setUsers(await pharmacyApi.getChemistUsers())
+      const [chemistScope, chemistUsers] = await Promise.all([
+        pharmacyApi.getCurrentChemist(),
+        pharmacyApi.getChemistUsers(),
+      ])
+      setScope(chemistScope)
+      setUsers(chemistUsers)
     } catch (err: any) {
       setError(err.message || "Failed to load chemist users")
     } finally {
       setLoading(false)
     }
   }
+
+  const canManageStaff = Boolean(scope?.isPrimary || scope?.canManageUsers)
 
   useEffect(() => {
     loadUsers()
@@ -81,15 +89,26 @@ export function ChemistUserManagement() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Chemist Users</h1>
-          <p className="text-muted-foreground">Create staff accounts for dispensing and lab referral work under your chemist profile.</p>
+          <p className="text-muted-foreground">
+            {canManageStaff
+              ? "Create staff accounts for dispensing and lab referral work under your chemist profile."
+              : "View staff accounts attached to your external chemist profile."}
+          </p>
         </div>
-        <Button onClick={() => setDialogOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add Staff User
-        </Button>
+        {canManageStaff && (
+          <Button onClick={() => setDialogOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Add Staff User
+          </Button>
+        )}
       </div>
 
       {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
+      {!loading && !canManageStaff && (
+        <div className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
+          You can view chemist staff accounts, but only the primary user or a staff manager can add users or change staff permissions.
+        </div>
+      )}
 
       <Card>
         <CardHeader>
@@ -97,7 +116,11 @@ export function ChemistUserManagement() {
             <UserCog className="h-5 w-5" />
             Staff Accounts
           </CardTitle>
-          <CardDescription>Only the primary chemist user can add or deactivate staff accounts.</CardDescription>
+          <CardDescription>
+            {canManageStaff
+              ? "Primary users and staff managers can add, deactivate, or grant staff-management permissions."
+              : "Read-only staff directory for your chemist."}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -136,7 +159,7 @@ export function ChemistUserManagement() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      {!user.isPrimary && (
+                      {canManageStaff && !user.isPrimary && (
                         <div className="flex justify-end gap-2">
                           <Button
                             variant="ghost"
@@ -154,6 +177,7 @@ export function ChemistUserManagement() {
                           </Button>
                         </div>
                       )}
+                      {!canManageStaff && <span className="text-xs text-muted-foreground">View only</span>}
                     </TableCell>
                   </TableRow>
                 ))}

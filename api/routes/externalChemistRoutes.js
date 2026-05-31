@@ -1533,7 +1533,10 @@ router.patch('/external-referrals/:id/items/:referralItemId', async (req, res) =
 
 router.get('/chemist/users', async (req, res) => {
   try {
-    const { scope } = await requirePrimaryChemistUser(req);
+    const user = getAuthUser(req);
+    if (!user) return res.status(401).json({ error: 'Authentication required' });
+    const scope = await getChemistScopeForUser(user.id || user.userId);
+    if (!scope) return res.status(403).json({ error: 'Chemist user is not assigned to a chemist' });
     const [rows] = await pool.execute(
       `SELECT ecu.chemistUserId, ecu.chemistId, ecu.userId, ecu.isPrimary, ecu.isActive, ecu.canManageUsers,
               ecu.createdAt, ecu.updatedAt,

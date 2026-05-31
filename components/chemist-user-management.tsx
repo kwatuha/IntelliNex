@@ -1,6 +1,6 @@
 "use client"
 
-import { type FormEvent, useEffect, useState } from "react"
+import { type FormEvent, useEffect, useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Loader2, Plus, UserCog } from "lucide-react"
 import { pharmacyApi } from "@/lib/api"
+import { useAuth } from "@/lib/auth/auth-context"
 
 const emptyForm = {
   username: "",
@@ -22,7 +23,11 @@ const emptyForm = {
 }
 
 export function ChemistUserManagement() {
+  const { user, isLoading: authLoading } = useAuth()
   const [scope, setScope] = useState<any>(null)
+  const [chemists, setChemists] = useState<any[]>([])
+  const [selectedChemistId, setSelectedChemistId] = useState("")
+  const [usersMode, setUsersMode] = useState<"unknown" | "chemist" | "directory">("unknown")
   const [users, setUsers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -30,16 +35,54 @@ export function ChemistUserManagement() {
   const [form, setForm] = useState(emptyForm)
   const [error, setError] = useState<string | null>(null)
 
+  const isCurrentUserChemist = useMemo(() => {
+    const roleName = String(user?.role || (user as any)?.roleName || "").toLowerCase()
+    return roleName === "chemist" || roleName.includes("external_pharmacy") || roleName.includes("chemist")
+  }, [user])
+
   const loadUsers = async () => {
+    if (authLoading) return
     try {
       setLoading(true)
       setError(null)
-      const [chemistScope, chemistUsers] = await Promise.all([
-        pharmacyApi.getCurrentChemist(),
-        pharmacyApi.getChemistUsers(),
-      ])
-      setScope(chemistScope)
-      setUsers(chemistUsers)
+      let mode = usersMode
+      let chemistScope = scope
+      let targetChemistId = selectedChemistId
+
+      if (mode === "unknown") {
+        if (isCurrentUserChemist) {
+          try {
+            chemistScope = await pharmacyApi.getCurrentChemist()
+            setScope(chemistScope)
+            setUsersMode("chemist")
+            mode = "chemist"
+            targetChemistId = String(chemistScope.chemistId)
+            setSelectedChemistId(targetChemistId)
+          } catch {
+            setUsersMode("directory")
+            mode = "directory"
+          }
+        } else {
+          setUsersMode("directory")
+          mode = "directory"
+        }
+      }
+
+      if (mode === "directory") {
+        const chemistData = await pharmacyApi.getExternalChemists(undefined, true)
+        setChemists(chemistData)
+        targetChemistId = targetChemistId || (chemistData[0]?.chemistId ? String(chemistData[0].chemistId) : "")
+        if (targetChemistId && targetChemistId !== selectedChemistId) setSelectedChemistId(targetChemistId)
+        setUsers(targetChemistId ? await pharmacyApi.getChemistUsers({ chemistId: targetChemistId }) : [])
+      } else {
+        if (!chemistScope) {
+          chemistScope = await pharmacyApi.getCurrentChemist()
+          setScope(chemistScope)
+        }
+        targetChemistId = String(chemistScope.chemistId)
+        if (targetChemistId !== selectedChemistId) setSelectedChemistId(targetChemistId)
+        setUsers(await pharmacyApi.getChemistUsers())
+      }
     } catch (err: any) {
       setError(err.message || "Failed to load chemist users")
     } finally {
@@ -47,11 +90,13 @@ export function ChemistUserManagement() {
     }
   }
 
-  const canManageStaff = Boolean(scope?.isPrimary || scope?.canManageUsers)
+  const canManageStaff = usersMode === "chemist" && Boolean(scope?.isPrimary || scope?.canManageUsers)
+  const selectedChemist = scope || chemists.find((chemist) => String(chemist.chemistId) === selectedChemistId)
 
   useEffect(() => {
-    loadUsers()
-  }, [])
+    const handle = setTimeout(loadUsers, 250)
+    return () => clearTimeout(handle)
+  }, [selectedChemistId, usersMode, authLoading, isCurrentUserChemist])
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
@@ -92,21 +137,38 @@ export function ChemistUserManagement() {
           <p className="text-muted-foreground">
             {canManageStaff
               ? "Create staff accounts for dispensing and lab referral work under your chemist profile."
-              : "View staff accounts attached to your external chemist profile."}
+              : usersMode === "directory"
+                ? "Review staff accounts attached to each external chemist."
+                : "View staff accounts attached to your external chemist profile."}
           </p>
         </div>
-        {canManageStaff && (
-          <Button onClick={() => setDialogOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Staff User
-          </Button>
-        )}
+        <div className="flex flex-wrap gap-2">
+          {usersMode === "directory" && (
+            <select
+              className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+              value={selectedChemistId}
+              onChange={(event) => setSelectedChemistId(event.target.value)}
+            >
+              {chemists.map((chemist) => (
+                <option key={chemist.chemistId} value={String(chemist.chemistId)}>{chemist.chemistName}</option>
+              ))}
+            </select>
+          )}
+          {canManageStaff && (
+            <Button onClick={() => setDialogOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Staff User
+            </Button>
+          )}
+        </div>
       </div>
 
       {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
       {!loading && !canManageStaff && (
         <div className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
-          You can view chemist staff accounts, but only the primary user or a staff manager can add users or change staff permissions.
+          {usersMode === "directory"
+            ? `Viewing staff users for ${selectedChemist?.chemistName || "the selected chemist"}. Admins can review these accounts, while chemist primary users manage staff creation and permissions.`
+            : "You can view chemist staff accounts, but only the primary user or a staff manager can add users or change staff permissions."}
         </div>
       )}
 
@@ -119,7 +181,9 @@ export function ChemistUserManagement() {
           <CardDescription>
             {canManageStaff
               ? "Primary users and staff managers can add, deactivate, or grant staff-management permissions."
-              : "Read-only staff directory for your chemist."}
+              : usersMode === "directory"
+                ? "Read-only staff directory by selected chemist."
+                : "Read-only staff directory for your chemist."}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -129,6 +193,7 @@ export function ChemistUserManagement() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  {usersMode === "directory" && <TableHead>Chemist</TableHead>}
                   <TableHead>User</TableHead>
                   <TableHead>Contact</TableHead>
                   <TableHead>Role</TableHead>
@@ -139,6 +204,12 @@ export function ChemistUserManagement() {
               <TableBody>
                 {users.map((user) => (
                   <TableRow key={user.chemistUserId}>
+                    {usersMode === "directory" && (
+                      <TableCell>
+                        <div className="font-medium">{user.chemistName || selectedChemist?.chemistName || "-"}</div>
+                        <div className="text-xs text-muted-foreground">{user.chemistCode || "-"}</div>
+                      </TableCell>
+                    )}
                     <TableCell>
                       <div className="font-medium">{`${user.firstName || ""} ${user.lastName || ""}`.trim() || user.username}</div>
                       <div className="text-xs text-muted-foreground">@{user.username}</div>
@@ -183,7 +254,7 @@ export function ChemistUserManagement() {
                 ))}
                 {users.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">No chemist users found.</TableCell>
+                    <TableCell colSpan={usersMode === "directory" ? 6 : 5} className="py-8 text-center text-muted-foreground">No chemist users found.</TableCell>
                   </TableRow>
                 )}
               </TableBody>

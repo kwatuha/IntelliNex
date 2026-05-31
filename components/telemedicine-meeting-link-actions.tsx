@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useToast } from "@/hooks/use-toast"
 import { useTelemedicineFloating } from "@/lib/telemedicine-floating-context"
-import { Copy, PanelRightOpen } from "lucide-react"
+import { Copy, ExternalLink, PanelRightOpen } from "lucide-react"
 
 type Props = {
   sessionId: string | number
@@ -32,6 +32,7 @@ export function TelemedicineMeetingLinkActions({
 
   const url = zoomJoinUrl?.trim() || ""
   const hasUrl = !!url
+  const href = url && /^https?:\/\//i.test(url) ? url : url ? `https://${url}` : ""
 
   const copy = async () => {
     if (!hasUrl) {
@@ -99,6 +100,14 @@ export function TelemedicineMeetingLinkActions({
           <Copy className="h-3.5 w-3.5 mr-1.5" />
           Copy link
         </Button>
+        {href && (
+          <Button type="button" variant="outline" size={compact ? "sm" : "default"} className={compact ? "h-8 text-xs" : ""} asChild>
+            <a href={href} target="_blank" rel="noreferrer">
+              <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+              Open link
+            </a>
+          </Button>
+        )}
       </div>
     </div>
   )

@@ -95,3 +95,9 @@ export function meetingLinkFieldLabel(providerId: string | null | undefined): st
 export function isZoomProvider(providerId: string | null | undefined): boolean {
   return (providerId || "zoom_manual") === "zoom_manual"
 }
+
+export function meetingHrefFromUrl(url: string | null | undefined): string {
+  const value = String(url || "").trim()
+  if (!value) return ""
+  return /^https?:\/\//i.test(value) ? value : `https://${value}`
+}

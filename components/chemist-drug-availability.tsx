@@ -9,9 +9,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
-import { Download, FileSpreadsheet, FlaskConical, Loader2, PackageCheck, Pill, Plus, Search, Trash2, Upload } from "lucide-react"
-import Link from "next/link"
+import { Download, FileSpreadsheet, History, Loader2, PackageCheck, Pill, Plus, Search, Trash2, Upload } from "lucide-react"
 import { pharmacyApi } from "@/lib/api"
+import { useAuth } from "@/lib/auth/auth-context"
 
 type ChemistDrug = {
   chemistDrugId: number
@@ -54,6 +54,7 @@ const emptyForm = {
 }
 
 export function ChemistDrugAvailability() {
+  const { user, isLoading: authLoading } = useAuth()
   const [chemist, setChemist] = useState<any>(null)
   const [chemists, setChemists] = useState<any[]>([])
   const [selectedChemistId, setSelectedChemistId] = useState("")
@@ -73,8 +74,16 @@ export function ChemistDrugAvailability() {
   const [importing, setImporting] = useState(false)
   const [importPreview, setImportPreview] = useState<any[]>([])
   const [importErrors, setImportErrors] = useState<string[]>([])
+  const [historyDrug, setHistoryDrug] = useState<ChemistDrug | null>(null)
+  const [historyRows, setHistoryRows] = useState<any[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const isCurrentUserChemist = useMemo(() => {
+    const roleName = String(user?.role || (user as any)?.roleName || "").toLowerCase()
+    return roleName === "chemist" || roleName.includes("external_pharmacy") || roleName.includes("chemist")
+  }, [user])
 
   const loadData = async () => {
+    if (authLoading) return
     try {
       setLoading(true)
       setError(null)
@@ -83,14 +92,19 @@ export function ChemistDrugAvailability() {
       let mode = availabilityMode
 
       if (mode === "unknown") {
-        try {
-          scope = await pharmacyApi.getCurrentChemist()
-          setChemist(scope)
-          setAvailabilityMode("chemist")
-          mode = "chemist"
-          targetChemistId = String(scope.chemistId)
-          setSelectedChemistId(targetChemistId)
-        } catch {
+        if (isCurrentUserChemist) {
+          try {
+            scope = await pharmacyApi.getCurrentChemist()
+            setChemist(scope)
+            setAvailabilityMode("chemist")
+            mode = "chemist"
+            targetChemistId = String(scope.chemistId)
+            setSelectedChemistId(targetChemistId)
+          } catch {
+            setAvailabilityMode("directory")
+            mode = "directory"
+          }
+        } else {
           setAvailabilityMode("directory")
           mode = "directory"
         }
@@ -137,7 +151,7 @@ export function ChemistDrugAvailability() {
   useEffect(() => {
     const handle = setTimeout(loadData, 250)
     return () => clearTimeout(handle)
-  }, [search, statusFilter, selectedChemistId, availabilityMode])
+  }, [search, statusFilter, selectedChemistId, availabilityMode, authLoading, isCurrentUserChemist])
 
   const summary = useMemo(() => ({
     available: drugs.filter((drug) => drug.availabilityStatus === "available").length,
@@ -230,6 +244,35 @@ export function ChemistDrugAvailability() {
     } catch (err: any) {
       setError(err.message || "Failed to remove drug")
     }
+  }
+
+  const openHistory = async (drug: ChemistDrug) => {
+    const targetChemistId = selectedChemistId || String(drug.chemistId)
+    try {
+      setHistoryDrug(drug)
+      setHistoryRows([])
+      setHistoryLoading(true)
+      setError(null)
+      const rows = await pharmacyApi.getExternalChemistDrugMovements(targetChemistId, String(drug.chemistDrugId), 100)
+      setHistoryRows(rows)
+    } catch (err: any) {
+      setError(err.message || "Failed to load stock movement history")
+    } finally {
+      setHistoryLoading(false)
+    }
+  }
+
+  const movementActor = (row: any) =>
+    `${row.actorFirstName || ""} ${row.actorLastName || ""}`.trim() || row.actorUsername || "-"
+
+  const prescribedBy = (row: any) =>
+    `${row.prescribedByFirstName || ""} ${row.prescribedByLastName || ""}`.trim() || row.prescribedByUsername || "-"
+
+  const movementReference = (row: any) => {
+    if (row.referralNumber) {
+      return [row.referralNumber, row.prescriptionNumber, row.referralMedicationName].filter(Boolean).join(" | ")
+    }
+    return row.referenceType || "-"
   }
 
   const statusBadge = (status: string) => {
@@ -429,12 +472,6 @@ export function ChemistDrugAvailability() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" asChild>
-            <Link href="/chemist/labs">
-              <FlaskConical className="mr-2 h-4 w-4" />
-              View Available Lab Tests
-            </Link>
-          </Button>
           {!canManageAvailability && (
             <select
               className="h-10 rounded-md border border-input bg-background px-3 text-sm"
@@ -544,6 +581,9 @@ export function ChemistDrugAvailability() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
+                        <Button variant="ghost" size="sm" onClick={() => openHistory(drug)} title="Pickup and stock history">
+                          <History className="h-4 w-4" />
+                        </Button>
                         {canManageAvailability ? (
                           <>
                             <Button variant="ghost" size="sm" onClick={() => openEdit(drug)}>Edit</Button>
@@ -657,6 +697,51 @@ export function ChemistDrugAvailability() {
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(historyDrug)} onOpenChange={(open) => { if (!open) setHistoryDrug(null) }}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>Pickup & Stock History{historyDrug ? ` - ${historyDrug.medicationName}` : ""}</DialogTitle>
+          </DialogHeader>
+          {historyLoading ? (
+            <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Movement</TableHead>
+                  <TableHead>Qty</TableHead>
+                  <TableHead>Before / After</TableHead>
+                  <TableHead>Reference</TableHead>
+                  <TableHead>Issued / Recorded By</TableHead>
+                  <TableHead>Prescribed By</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {historyRows.map((row) => (
+                  <TableRow key={row.movementId}>
+                    <TableCell>{row.createdAt ? new Date(row.createdAt).toLocaleString() : "-"}</TableCell>
+                    <TableCell>{String(row.movementType || "").replaceAll("_", " ")}</TableCell>
+                    <TableCell className={Number(row.quantityChange) < 0 ? "text-red-600" : "text-green-700"}>
+                      {Number(row.quantityChange) > 0 ? "+" : ""}{row.quantityChange}
+                    </TableCell>
+                    <TableCell>{row.quantityBefore} / {row.quantityAfter}</TableCell>
+                    <TableCell>{movementReference(row)}</TableCell>
+                    <TableCell>{movementActor(row)}</TableCell>
+                    <TableCell>{prescribedBy(row)}</TableCell>
+                  </TableRow>
+                ))}
+                {historyRows.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">No stock movements recorded yet.</TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
         </DialogContent>
       </Dialog>
 

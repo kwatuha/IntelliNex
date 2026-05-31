@@ -3,10 +3,9 @@
 import { useState, useMemo, Suspense, useEffect, useCallback, useRef, startTransition } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area"
-import { MoreHorizontal, FileText, PlayCircle, Stethoscope, Pill, Scan, ClipboardList, Video, ChevronDown } from "lucide-react"
+import { MoreHorizontal, FileText, PlayCircle, Stethoscope, Pill, Scan, ClipboardList, Video } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   getQueueByServicePoint,
@@ -24,7 +23,7 @@ import {
   TelemedicineOptionalMeetingLinkFields,
   telemedicineOptionalLinkBody,
 } from "@/components/telemedicine-optional-meeting-link-fields"
-import type { TelemedicineVideoProviderId } from "@/lib/telemedicine-providers"
+import { isZoomProvider, meetingHrefFromUrl, type TelemedicineVideoProviderId } from "@/lib/telemedicine-providers"
 import { telemedicineCreateToast } from "@/lib/telemedicine-create-result"
 import { TelemedicineZoomDefaultsRequiredBanner } from "@/components/telemedicine-zoom-defaults-banner"
 import { useTelemedicineZoomDefaults } from "@/lib/hooks/use-telemedicine-zoom-defaults"
@@ -357,13 +356,20 @@ function QueueContent({
   const [radiologyQueueForReport, setRadiologyQueueForReport] = useState<QueueEntryLite | null>(null)
   const [procedureQueueForComplete, setProcedureQueueForComplete] = useState<QueueEntryLite | null>(null)
   const [telemedicineStartingQueueId, setTelemedicineStartingQueueId] = useState<number | string | null>(null)
+  const [pendingTelemedicineEntry, setPendingTelemedicineEntry] = useState<any>(null)
   const [telemedicineVideoProvider, setTelemedicineVideoProvider] = useState<TelemedicineVideoProviderId>("zoom_manual")
   const [telemedicineMeetingUrl, setTelemedicineMeetingUrl] = useState("")
   const [telemedicineMeetingPasscode, setTelemedicineMeetingPasscode] = useState("")
   const { user } = useAuth()
   const { openSession: openTelemedicineFloating } = useTelemedicineFloating()
   const { loading: zoomDefaultsLoading, hasDefaults: hasZoomDefaults } = useTelemedicineZoomDefaults()
-  const canStartNewTelemedicineVisit = !zoomDefaultsLoading && hasZoomDefaults
+  const selectedProviderNeedsZoomDefaults =
+    isZoomProvider(telemedicineVideoProvider) && !telemedicineMeetingUrl.trim()
+  const selectedProviderNeedsMeetingLink =
+    !isZoomProvider(telemedicineVideoProvider) && !telemedicineMeetingUrl.trim()
+  const canStartNewTelemedicineVisit =
+    !selectedProviderNeedsMeetingLink &&
+    (!selectedProviderNeedsZoomDefaults || (!zoomDefaultsLoading && hasZoomDefaults))
   const isConsultation = servicePoint === "consultation"
   const isPharmacy = servicePoint === "pharmacy"
   const isTriage = servicePoint === "triage"
@@ -502,11 +508,13 @@ function QueueContent({
     setTriageFormOpen(true)
   }
 
-  const handleStartTelemedicine = async (entry: any) => {
+  const handleStartTelemedicine = async (entry: any, externalMeetingWindow?: Window | null) => {
     if (!canStartNewTelemedicineVisit) {
       toast({
-        title: "Meeting defaults required",
-        description: "Save Telemedicine → My Zoom defaults before starting a new visit, or join an active visit from Telemedicine.",
+        title: "Meeting link required",
+        description: selectedProviderNeedsMeetingLink
+          ? "Paste a Google Meet link before starting this session."
+          : "Save Telemedicine → My Zoom defaults, paste a Zoom link, or choose Google Meet and paste a Meet link.",
         variant: "destructive",
       })
       return
@@ -557,20 +565,34 @@ function QueueContent({
             },
       )
       if (created?.sessionId) {
+        const externalMeetingHref = !isZoomProvider(telemedicineVideoProvider)
+          ? meetingHrefFromUrl(created.zoomJoinUrl || telemedicineMeetingUrl)
+          : ""
         const patientDisplayName =
           entry.patientFirstName && entry.patientLastName
             ? `${entry.patientFirstName} ${entry.patientLastName}`.trim()
             : undefined
         openTelemedicineFloating(created.sessionId, { patientId, patientDisplayName })
+        if (externalMeetingHref) {
+          if (externalMeetingWindow) {
+            externalMeetingWindow.location.href = externalMeetingHref
+          } else {
+            window.open(externalMeetingHref, "_blank", "noopener,noreferrer")
+          }
+        }
         toast(
           telemedicineCreateToast(created, {
             title: "Telemedicine session ready",
-            description: "Use the floating panel — minimize it to browse charts or notes.",
+            description: externalMeetingHref
+              ? "Google Meet opened in a new browser tab. The HMIS session panel is also available for consent and documentation."
+              : "Use the floating panel — minimize it to browse charts or notes.",
           }),
         )
+        setPendingTelemedicineEntry(null)
       }
     } catch (error: any) {
       console.error("Telemedicine create failed:", error)
+      externalMeetingWindow?.close()
       toast({
         title: "Telemedicine failed",
         description: error?.message || "Could not create telemedicine session",
@@ -1024,36 +1046,6 @@ function QueueContent({
           </>
         ) : isTelemedicine ? (
           <>
-            <div className="px-3 pt-3 pb-2 border-b bg-muted/20 space-y-2">
-              <TelemedicineZoomDefaultsRequiredBanner loading={zoomDefaultsLoading} hasDefaults={hasZoomDefaults} />
-              <Collapsible defaultOpen={false} className="rounded-md border border-dashed bg-background/50">
-                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 px-2 py-2 text-left text-sm font-medium hover:bg-muted/30 rounded-md [&[data-state=open]>svg]:rotate-180">
-                  <span>
-                    Video platform for this queue{" "}
-                    <span className="block text-xs font-normal text-muted-foreground mt-0.5">
-                      Optional — expand for non-Zoom (later). Collapsed by default.
-                    </span>
-                  </span>
-                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200" />
-                </CollapsibleTrigger>
-                <CollapsibleContent className="space-y-2 pb-1 pt-0">
-                  <TelemedicineProviderSelect
-                    variant="compact"
-                    label="Video platform for this queue"
-                    value={telemedicineVideoProvider}
-                    onChange={setTelemedicineVideoProvider}
-                  />
-                  <TelemedicineOptionalMeetingLinkFields
-                    compact
-                    videoProvider={telemedicineVideoProvider}
-                    joinUrl={telemedicineMeetingUrl}
-                    onJoinUrlChange={setTelemedicineMeetingUrl}
-                    passcode={telemedicineMeetingPasscode}
-                    onPasscodeChange={setTelemedicineMeetingPasscode}
-                  />
-                </CollapsibleContent>
-              </Collapsible>
-            </div>
             <div className="grid grid-cols-12 bg-muted/50 p-3 text-sm font-medium">
               <div className="col-span-1">#</div>
               <div className="col-span-3">Patient</div>
@@ -1090,21 +1082,14 @@ function QueueContent({
                       <Button
                         variant="default"
                         size="sm"
-                        onClick={() => handleStartTelemedicine(entry)}
-                        disabled={
-                          telemedicineStartingQueueId === (entry.queueId ?? entry.id) ||
-                          zoomDefaultsLoading ||
-                          !canStartNewTelemedicineVisit
-                        }
-                        title={
-                          !canStartNewTelemedicineVisit && !zoomDefaultsLoading
-                            ? "Save Telemedicine → My Zoom defaults before starting"
-                            : undefined
-                        }
+                        onClick={() => setPendingTelemedicineEntry(entry)}
+                        disabled={telemedicineStartingQueueId === (entry.queueId ?? entry.id)}
                         className="w-full"
                       >
                         <Video className="h-3 w-3 mr-1" />
-                        {telemedicineStartingQueueId === (entry.queueId ?? entry.id) ? "Starting…" : "Start telemedicine"}
+                        {telemedicineStartingQueueId === (entry.queueId ?? entry.id)
+                          ? "Starting…"
+                          : "Start Telemedicine"}
                       </Button>
                     </div>
                   </div>
@@ -1251,6 +1236,66 @@ function QueueContent({
         onClose={() => setProcedureQueueForComplete(null)}
         onSuccess={loadQueueData}
       />
+
+      <Dialog open={!!pendingTelemedicineEntry} onOpenChange={(open) => !open && setPendingTelemedicineEntry(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Start Telemedicine Session</DialogTitle>
+            <DialogDescription>
+              Choose the video platform for {pendingTelemedicineEntry?.patientName || "this patient"}, then start the session.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {isZoomProvider(telemedicineVideoProvider) && (
+              <TelemedicineZoomDefaultsRequiredBanner loading={zoomDefaultsLoading} hasDefaults={hasZoomDefaults} />
+            )}
+            <TelemedicineProviderSelect
+              label="Video platform"
+              value={telemedicineVideoProvider}
+              onChange={setTelemedicineVideoProvider}
+              disabled={telemedicineStartingQueueId != null}
+            />
+            <TelemedicineOptionalMeetingLinkFields
+              videoProvider={telemedicineVideoProvider}
+              joinUrl={telemedicineMeetingUrl}
+              onJoinUrlChange={setTelemedicineMeetingUrl}
+              passcode={telemedicineMeetingPasscode}
+              onPasscodeChange={setTelemedicineMeetingPasscode}
+            />
+            {selectedProviderNeedsMeetingLink && (
+              <p className="text-sm text-destructive">Paste a Google Meet link before starting.</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPendingTelemedicineEntry(null)} disabled={telemedicineStartingQueueId != null}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                if (!pendingTelemedicineEntry) return
+                const meetWindow =
+                  !isZoomProvider(telemedicineVideoProvider) && telemedicineMeetingUrl.trim()
+                    ? window.open("about:blank", "_blank")
+                    : null
+                if (meetWindow) {
+                  meetWindow.document.title = "Opening Google Meet..."
+                  meetWindow.document.body.innerHTML = "Opening Google Meet..."
+                }
+                void handleStartTelemedicine(pendingTelemedicineEntry, meetWindow)
+              }}
+              disabled={
+                telemedicineStartingQueueId != null ||
+                selectedProviderNeedsMeetingLink ||
+                (selectedProviderNeedsZoomDefaults && zoomDefaultsLoading) ||
+                !canStartNewTelemedicineVisit
+              }
+            >
+              {telemedicineStartingQueueId != null ? "Starting..." : "Start Telemedicine"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Triage Assessment Form for triage */}
       {isTriage && selectedPatientForTriage && (

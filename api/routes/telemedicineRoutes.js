@@ -193,12 +193,33 @@ async function acquirePoolConnection() {
   }
 }
 
-function normalizeZoomUrl(url) {
+function normalizeMeetingUrl(url) {
   if (!url || typeof url !== 'string') return null;
   const t = url.trim();
   if (!t) return null;
   if (!/^https?:\/\//i.test(t)) return `https://${t}`;
   return t;
+}
+
+function validateMeetingUrlForProvider(provider, url) {
+  if (!url) return null;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return 'Meeting link must be a valid URL.';
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    return 'Meeting link must start with http:// or https://.';
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (provider === 'google_meet' && host !== 'meet.google.com') {
+    return 'Google Meet sessions must use a meet.google.com link, for example https://meet.google.com/wjv-vhbt-diw.';
+  }
+  if (provider === 'zoom_manual' && !host.includes('zoom.')) {
+    return 'Zoom sessions must use a Zoom join link.';
+  }
+  return null;
 }
 
 /** Same normalization for Zoom, Meet, Teams, or any pasted HTTPS join URL */
@@ -275,7 +296,7 @@ router.put('/my-defaults', async (req, res) => {
     const { defaultZoomJoinUrl, defaultZoomPassword } = req.body || {};
     const url =
       defaultZoomJoinUrl !== undefined && defaultZoomJoinUrl !== null && String(defaultZoomJoinUrl).trim() !== ''
-        ? normalizeZoomUrl(String(defaultZoomJoinUrl))
+        ? normalizeMeetingUrl(String(defaultZoomJoinUrl))
         : null;
     const pass =
       defaultZoomPassword !== undefined && defaultZoomPassword !== null && String(defaultZoomPassword).trim() !== ''
@@ -398,8 +419,13 @@ router.post('/sessions', async (req, res) => {
   const actor = userId || null;
 
   const sessionUuid = crypto.randomUUID();
-  let zUrl = normalizeZoomUrl(zoomJoinUrl);
+  let zUrl = normalizeMeetingUrl(zoomJoinUrl);
   let zPass = zoomPassword != null && String(zoomPassword).trim() !== '' ? String(zoomPassword).trim() : null;
+  const initialUrlError = validateMeetingUrlForProvider(providerToStore, zUrl);
+  if (initialUrlError) return res.status(400).json({ error: initialUrlError });
+  if (providerToStore === 'google_meet' && !zUrl) {
+    return res.status(400).json({ error: 'Paste a Google Meet link before starting a Google Meet telemedicine session.' });
+  }
 
   // Load "My Zoom defaults" only for Zoom — other platforms paste links on the session screen.
   // Try both doctorId (request) and logged-in user so defaults apply even if the client sent a mismatched id.
@@ -417,7 +443,7 @@ router.post('/sessions', async (req, res) => {
       try {
         const defs = await fetchUserTelemedicineDefaults(pool, uid);
         if (defs?.defaultZoomJoinUrl) {
-          zUrl = normalizeZoomUrl(defs.defaultZoomJoinUrl);
+          zUrl = normalizeMeetingUrl(defs.defaultZoomJoinUrl);
           if (!zPass && defs.defaultZoomPassword) {
             zPass = String(defs.defaultZoomPassword).trim() || null;
           }
@@ -471,24 +497,33 @@ router.post('/sessions', async (req, res) => {
         const ex = existingRows[0];
         let outUrl = ex.zoomJoinUrl;
         let outPass = ex.zoomPassword;
-        // If the visit has no link yet, apply this request's URL/pass (e.g. second clinician brings the Meet link).
+        const providerChanged = providerToStore !== (ex.provider || 'zoom_manual');
+        // If the clinician explicitly chooses another platform, switch the active visit instead of silently reopening Zoom.
         const existingEmpty = !ex.zoomJoinUrl || String(ex.zoomJoinUrl).trim() === '';
-        if (existingEmpty && zUrl) {
+        if (providerChanged || (existingEmpty && zUrl)) {
           await connection.execute(
             `UPDATE telemedicine_sessions
-             SET zoomJoinUrl = ?, zoomPassword = ?, updatedAt = NOW()
+             SET provider = ?, zoomJoinUrl = ?, zoomPassword = ?, updatedAt = NOW()
              WHERE sessionId = ?`,
-            [zUrl, zPass, ex.sessionId]
+            [
+              providerChanged ? providerToStore : ex.provider,
+              providerChanged ? zUrl : outUrl || zUrl,
+              providerChanged ? zPass : outPass || zPass,
+              ex.sessionId,
+            ]
           );
-          outUrl = zUrl;
-          outPass = zPass;
+          outUrl = providerChanged ? zUrl : outUrl || zUrl;
+          outPass = providerChanged ? zPass : outPass || zPass;
+          if (providerChanged) ex.provider = providerToStore;
         }
 
         await addAudit(
           ex.sessionId,
           'session_reused_join',
           actor,
-          `Joined existing active visit for patient ${pid} (requesting doctorId=${doctorId}; primary doctorId=${ex.doctorId})`,
+          providerChanged
+            ? `Switched active visit for patient ${pid} to ${providerToStore} (requesting doctorId=${doctorId}; primary doctorId=${ex.doctorId})`
+            : `Joined existing active visit for patient ${pid} (requesting doctorId=${doctorId}; primary doctorId=${ex.doctorId})`,
           connection
         );
         await connection.commit();
@@ -500,22 +535,26 @@ router.post('/sessions', async (req, res) => {
           zoomJoinUrl: outUrl,
           status: ex.status,
           reusedExistingSession: true,
+          providerSwitched: providerChanged,
           primaryDoctorId: ex.doctorId,
         });
       }
     }
 
-    // New visit only: require saved "My Zoom defaults" join URL for the logged-in user (joining an existing active visit is handled above).
+    // New Zoom visits need defaults for predictable reuse. Non-Zoom providers can be created with a pasted link or link pending.
     if (!userId) {
       await connection.rollback();
       return res.status(401).json({ error: 'Unauthorized' });
     }
-    const canStartNewVisit = await userHasSavedZoomDefaults(connection, userId);
+    const canStartNewVisit =
+      providerToStore !== 'zoom_manual' ||
+      !!zUrl ||
+      (await userHasSavedZoomDefaults(connection, userId));
     if (!canStartNewVisit) {
       await connection.rollback();
       return res.status(403).json({
         error:
-          'Save your meeting defaults under Telemedicine → My Zoom defaults before starting a new visit. You can join an active visit using Join Session on the telemedicine board.',
+          'Save your meeting defaults under Telemedicine → My Zoom defaults before starting a new Zoom visit, or choose Google Meet and paste a Meet link.',
         code: 'TELEMEDICINE_ZOOM_DEFAULTS_REQUIRED',
       });
     }
@@ -590,12 +629,12 @@ router.post('/sessions', async (req, res) => {
   }
 });
 
-/** Update pasted Zoom join link + optional password (doctor/admin on own session). */
+/** Update pasted meeting join link + optional password/provider (doctor/admin on own session). */
 router.patch('/sessions/:sessionId/link', async (req, res) => {
   try {
     const { sessionId } = req.params;
     const userId = getUserId(req);
-    const { zoomJoinUrl, zoomPassword } = req.body || {};
+    const { zoomJoinUrl, zoomPassword, videoProvider, provider: providerBody } = req.body || {};
 
     const [rows] = await pool.execute(
       `SELECT sessionId, doctorId, provider FROM telemedicine_sessions WHERE sessionId = ?`,
@@ -611,7 +650,22 @@ router.patch('/sessions/:sessionId/link', async (req, res) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
-    const zUrl = zoomJoinUrl !== undefined ? normalizeZoomUrl(zoomJoinUrl) : undefined;
+    const rawProvider = videoProvider != null && String(videoProvider).trim() !== '' ? videoProvider : providerBody;
+    let providerToStore;
+    if (rawProvider != null && String(rawProvider).trim() !== '') {
+      const p = String(rawProvider).trim();
+      if (!TELEMEDICINE_VIDEO_PROVIDERS.has(p)) {
+        return res.status(400).json({
+          error: `Invalid videoProvider. Allowed: ${[...TELEMEDICINE_VIDEO_PROVIDERS].join(', ')}`,
+        });
+      }
+      providerToStore = p;
+    }
+
+    const effectiveProvider = providerToStore || s.provider || 'zoom_manual';
+    const zUrl = zoomJoinUrl !== undefined ? normalizeMeetingUrl(zoomJoinUrl) : undefined;
+    const urlError = validateMeetingUrlForProvider(effectiveProvider, zUrl);
+    if (urlError) return res.status(400).json({ error: urlError });
     const zPass =
       zoomPassword !== undefined
         ? zoomPassword != null && String(zoomPassword).trim() !== ''
@@ -621,6 +675,10 @@ router.patch('/sessions/:sessionId/link', async (req, res) => {
 
     const updates = [];
     const params = [];
+    if (providerToStore !== undefined) {
+      updates.push('provider = ?');
+      params.push(providerToStore);
+    }
     if (zUrl !== undefined) {
       updates.push('zoomJoinUrl = ?');
       params.push(zUrl);
@@ -630,16 +688,16 @@ router.patch('/sessions/:sessionId/link', async (req, res) => {
       params.push(zPass);
     }
     if (updates.length === 0) {
-      return res.status(400).json({ error: 'Provide zoomJoinUrl and/or zoomPassword' });
+      return res.status(400).json({ error: 'Provide provider, zoomJoinUrl, and/or zoomPassword' });
     }
     updates.push('updatedAt = NOW()');
     params.push(sessionId);
 
     await pool.execute(`UPDATE telemedicine_sessions SET ${updates.join(', ')} WHERE sessionId = ?`, params);
-    await addAudit(sessionId, 'zoom_link_updated', userId, null);
+    await addAudit(sessionId, 'meeting_link_updated', userId, providerToStore || s.provider || null);
 
     const [out] = await pool.execute(
-      `SELECT sessionId, zoomJoinUrl, zoomPassword, status FROM telemedicine_sessions WHERE sessionId = ?`,
+      `SELECT sessionId, provider, zoomJoinUrl, zoomPassword, status FROM telemedicine_sessions WHERE sessionId = ?`,
       [sessionId]
     );
     return res.status(200).json(out[0]);
@@ -1107,6 +1165,10 @@ router.post('/sessions/:sessionId/zoom-sdk-signature', async (req, res) => {
       return res.status(403).json({ error: 'Forbidden' });
     }
 
+    if ((s.provider || 'zoom_manual') !== 'zoom_manual') {
+      return res.status(400).json({ error: 'Embedded in-page video is currently available only for Zoom sessions. Use the saved meeting link for this provider.' });
+    }
+
     if (!s.zoomJoinUrl) {
       return res.status(400).json({ error: 'No Zoom join URL saved yet. Paste the meeting link on the session page.' });
     }
@@ -1140,7 +1202,7 @@ router.post('/sessions/:sessionId/zoom-sdk-signature', async (req, res) => {
   }
 });
 
-/** Doctor join: returns stored Zoom URL (no token — user opens normal Zoom client). */
+/** Doctor join: returns stored meeting URL (no vendor token — user opens normal video provider link). */
 router.get('/sessions/:sessionId/join-url', async (req, res) => {
   try {
     const { sessionId } = req.params;
@@ -1175,7 +1237,7 @@ router.get('/sessions/:sessionId/join-url', async (req, res) => {
     }
 
     if (!s.zoomJoinUrl) {
-      return res.status(400).json({ error: 'No Zoom join URL saved yet. Paste the meeting link on the session page.' });
+      return res.status(400).json({ error: 'No meeting link saved yet. Paste the meeting link on the session page.' });
     }
 
     return res.status(200).json({

@@ -8,9 +8,10 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { SearchableSelect } from "@/components/ui/searchable-select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
-import { Download, FileSpreadsheet, Loader2, Plus, RefreshCw, Search, Send } from "lucide-react"
+import { AlertTriangle, Download, FileSpreadsheet, Loader2, Plus, RefreshCw, Search, Send } from "lucide-react"
 import { laboratoryApi, pharmacyApi } from "@/lib/api"
 
 type Prescription = {
@@ -99,6 +100,41 @@ export function ExternalReferrals({
     [labOrders, selectedLabOrderId]
   )
   const selectedItemIdsKey = useMemo(() => Array.from(selectedItems).sort((a, b) => a - b).join(","), [selectedItems])
+  const prescriptionOptions = useMemo(() => (
+    prescriptions.map((prescription) => {
+      const patient = `${prescription.firstName || ""} ${prescription.lastName || ""}`.trim() || "Unknown patient"
+      const itemSummary = (prescription.items || []).slice(0, 2).map((item) => item.medicationName || item.displayName).filter(Boolean).join(", ")
+      return {
+        value: String(prescription.prescriptionId),
+        label: [
+          prescription.prescriptionNumber,
+          patient,
+          prescription.patientNumber,
+          itemSummary,
+        ].filter(Boolean).join(" - "),
+      }
+    })
+  ), [prescriptions])
+  const labOrderOptions = useMemo(() => (
+    labOrders.map((order) => {
+      const patient = `${order.firstName || ""} ${order.lastName || ""}`.trim() || "Unknown patient"
+      return {
+        value: String(order.orderId),
+        label: [
+          order.orderNumber,
+          patient,
+          order.patientNumber,
+          order.testNames || "No tests listed",
+        ].filter(Boolean).join(" - "),
+      }
+    })
+  ), [labOrders])
+  const chemistOptions = useMemo(() => (
+    chemists.map((chemist) => ({
+      value: String(chemist.chemistId),
+      label: [chemist.chemistName, chemist.chemistCode].filter(Boolean).join(" - "),
+    }))
+  ), [chemists])
 
   const loadData = async () => {
     try {
@@ -192,10 +228,42 @@ export function ExternalReferrals({
     setNotes("")
   }
 
+  const unavailableSelectionMessage = () => {
+    if (!availability || availability.hasAllAvailable) return ""
+    const selected = availability.items?.filter((item: any) => selectedItems.has(Number(item.itemId))) || []
+    const blocked = selected.filter((item: any) => {
+      const info = item.availability || {}
+      if (referralType === "drug") return info.hasEnoughQuantity === false || info.displayStatus === "stale" || !["available", "low_stock"].includes(info.availabilityStatus)
+      return info.displayStatus === "stale" || info.availabilityStatus !== "available"
+    })
+    const details = blocked.map((item: any) => {
+      const info = item.availability || {}
+      const name = item.testName || item.medicationName || item.medicationNameFromCatalog || "Selected item"
+      if (referralType === "drug" && info.hasEnoughQuantity === false) {
+        return `${name} needs ${item.requiredQuantity || item.quantity || 1}, available after unpicked referrals is ${info.availableForReferral ?? 0}`
+      }
+      if (info.availabilityStatus === "not_listed") return `${name} is not listed by this chemist`
+      if (info.displayStatus === "stale") return `${name} needs stock confirmation`
+      return `${name} is ${String(info.availabilityStatus || "not available").replaceAll("_", " ")}`
+    })
+    return referralType === "lab"
+      ? `Cannot save referral. Selected lab test is not available in this chemist${details.length ? `: ${details.join("; ")}` : "."}`
+      : `Cannot save referral. Selected drug is not available or has insufficient quantity in this chemist${details.length ? `: ${details.join("; ")}` : "."}`
+  }
+
   const handleCreate = async (event: FormEvent) => {
     event.preventDefault()
     if ((referralType === "drug" && !selectedPrescriptionId) || (referralType === "lab" && !selectedLabOrderId) || !selectedChemistId) {
       setError(referralType === "lab" ? "Select both a lab order and chemist" : "Select both a prescription and chemist")
+      return
+    }
+    const availabilityMessage = unavailableSelectionMessage()
+    if (availabilityLoading) {
+      setError("Please wait for chemist availability check to finish.")
+      return
+    }
+    if (availabilityMessage) {
+      setError(availabilityMessage)
       return
     }
 
@@ -272,6 +340,7 @@ export function ExternalReferrals({
 
   const availabilityBadge = (availabilityInfo: any) => {
     if (!availabilityInfo) return <Badge variant="outline">Not checked</Badge>
+    if (availabilityInfo.hasEnoughQuantity === false) return <Badge variant="destructive">Insufficient qty</Badge>
     if (availabilityInfo.displayStatus === "stale") return <Badge variant="secondary">Stale update</Badge>
     if (availabilityInfo.availabilityStatus === "available") return <Badge>Available</Badge>
     if (availabilityInfo.availabilityStatus === "unavailable") return <Badge variant="destructive">Unavailable</Badge>
@@ -526,6 +595,8 @@ export function ExternalReferrals({
     }
   }
 
+  const unavailableMessage = unavailableSelectionMessage()
+
   return (
     <div className="space-y-4">
       {error && <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
@@ -653,39 +724,30 @@ export function ExternalReferrals({
               </div>
               <div className="space-y-2">
                 <Label>{referralType === "lab" ? "Lab order" : "Prescription"}</Label>
-                <select
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                <SearchableSelect
                   value={referralType === "lab" ? selectedLabOrderId : selectedPrescriptionId}
-                  onChange={(event) => referralType === "lab" ? setSelectedLabOrderId(event.target.value) : setSelectedPrescriptionId(event.target.value)}
-                  required
-                >
-                  <option value="">{referralType === "lab" ? "Select lab order" : "Select prescription"}</option>
-                  {referralType === "lab"
-                    ? labOrders.map((order) => (
-                        <option key={order.orderId} value={order.orderId}>
-                          {order.orderNumber} - {`${order.firstName || ""} ${order.lastName || ""}`.trim() || "Unknown patient"} - {order.testNames || "No tests listed"}
-                        </option>
-                      ))
-                    : prescriptions.map((prescription) => (
-                        <option key={prescription.prescriptionId} value={prescription.prescriptionId}>
-                          {prescription.prescriptionNumber} - {`${prescription.firstName || ""} ${prescription.lastName || ""}`.trim() || "Unknown patient"}
-                        </option>
-                      ))}
-                </select>
+                  onValueChange={(value) => {
+                    if (referralType === "lab") setSelectedLabOrderId(value)
+                    else setSelectedPrescriptionId(value)
+                    setAvailability(null)
+                  }}
+                  options={referralType === "lab" ? labOrderOptions : prescriptionOptions}
+                  placeholder={referralType === "lab" ? "Search lab order, patient, or test..." : "Search prescription, patient, or drug..."}
+                  emptyMessage={referralType === "lab" ? "No lab order found." : "No prescription found."}
+                />
               </div>
               <div className="space-y-2">
                 <Label>Chemist</Label>
-                <select
-                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                <SearchableSelect
                   value={selectedChemistId}
-                  onChange={(event) => setSelectedChemistId(event.target.value)}
-                  required
-                >
-                  <option value="">Select chemist</option>
-                  {chemists.map((chemist) => (
-                    <option key={chemist.chemistId} value={chemist.chemistId}>{chemist.chemistName}</option>
-                  ))}
-                </select>
+                  onValueChange={(value) => {
+                    setSelectedChemistId(value)
+                    setAvailability(null)
+                  }}
+                  options={chemistOptions}
+                  placeholder="Search chemist name or code..."
+                  emptyMessage="No chemist found."
+                />
               </div>
               <div className="space-y-2">
                 <Label>Pickup deadline</Label>
@@ -722,7 +784,9 @@ export function ExternalReferrals({
                           {itemAvailability?.matched && (
                             <div className="mt-1 text-xs text-muted-foreground">
                               Chemist listing: {itemAvailability.medicationName}
-                              {itemAvailability.quantityAvailable !== undefined ? ` | Qty ${itemAvailability.quantityAvailable}` : ""}
+                              {itemAvailability.quantityAvailable !== undefined ? ` | Stock ${itemAvailability.quantityAvailable}` : ""}
+                              {itemAvailability.reservedQuantity ? ` | Reserved ${itemAvailability.reservedQuantity}` : ""}
+                              {itemAvailability.availableForReferral !== undefined ? ` | Available to refer ${itemAvailability.availableForReferral}` : ""}
                               {itemAvailability.lastConfirmedAt ? ` | Confirmed ${new Date(itemAvailability.lastConfirmedAt).toLocaleDateString()}` : ""}
                             </div>
                           )}
@@ -749,6 +813,7 @@ export function ExternalReferrals({
                         <span>{availability.totals.outOfStock} out of stock</span>
                         <span>{availability.totals.notListed} not listed</span>
                         <span>{availability.totals.stale} stale</span>
+                        {availability.totals.insufficientQuantity ? <span>{availability.totals.insufficientQuantity} insufficient qty</span> : null}
                       </div>
                     ) : (
                       <div className="text-muted-foreground">Select prescription items to check stock availability.</div>
@@ -831,9 +896,16 @@ export function ExternalReferrals({
               <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
             </div>
 
+            {unavailableMessage && (
+              <div className="flex gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 shadow-sm dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" />
+                <span>{unavailableMessage}</span>
+              </div>
+            )}
+
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-              <Button type="submit" disabled={saving || selectedItems.size === 0}>
+              <Button type="submit" disabled={saving || availabilityLoading || selectedItems.size === 0 || Boolean(unavailableMessage)}>
                 {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
                 Create Referral
               </Button>

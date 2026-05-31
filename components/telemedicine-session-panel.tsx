@@ -14,7 +14,8 @@ import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
 import { telemedicineApi } from "@/lib/api"
-import { getTelemedicineProviderLabel, isZoomProvider, meetingLinkFieldLabel } from "@/lib/telemedicine-providers"
+import { getTelemedicineProviderLabel, getTelemedicineProviderOption, isZoomProvider, meetingLinkFieldLabel, type TelemedicineVideoProviderId } from "@/lib/telemedicine-providers"
+import { TelemedicineProviderSelect } from "@/components/telemedicine-provider-select"
 import { TelemedicineHelpLink } from "@/components/telemedicine-help-link"
 import {
   DropdownMenu,
@@ -22,7 +23,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { ChevronDown, MoreHorizontal, Video, VideoOff } from "lucide-react"
+import { ChevronDown, ExternalLink, MoreHorizontal, Video, VideoOff } from "lucide-react"
 import { ZoomMeetingInfoPopover } from "@/components/zoom-meeting-info-popover"
 import { cn } from "@/lib/utils"
 import { useTelemedicineFloating } from "@/lib/telemedicine-floating-context"
@@ -233,6 +234,7 @@ export function TelemedicineSessionPanel({
       setZoomJoinUrl(d.defaultZoomJoinUrl)
       setZoomPassword(d.defaultZoomPassword || "")
       await telemedicineApi.updateSessionLink(sessionId, {
+        provider: "zoom_manual",
         zoomJoinUrl: d.defaultZoomJoinUrl.trim(),
         zoomPassword: d.defaultZoomPassword?.trim() || null,
       })
@@ -254,6 +256,7 @@ export function TelemedicineSessionPanel({
     try {
       setSavingLink(true)
       await telemedicineApi.updateSessionLink(sessionId, {
+        provider: (session.provider as string) || "zoom_manual",
         zoomJoinUrl: zoomJoinUrl.trim() || null,
         zoomPassword: zoomPassword.trim() || null,
       })
@@ -353,7 +356,13 @@ export function TelemedicineSessionPanel({
     )
   }
 
-  const videoProviderId = (session.provider as string) || "zoom_manual"
+  const videoProviderId = ((session.provider as string) || "zoom_manual") as TelemedicineVideoProviderId
+  const providerOption = getTelemedicineProviderOption(videoProviderId)
+  const externalMeetingHref = zoomJoinUrl.trim()
+    ? /^https?:\/\//i.test(zoomJoinUrl.trim())
+      ? zoomJoinUrl.trim()
+      : `https://${zoomJoinUrl.trim()}`
+    : ""
 
   const hasLink = !!(session.zoomJoinUrl || zoomJoinUrl.trim())
 
@@ -362,6 +371,15 @@ export function TelemedicineSessionPanel({
   const meetingDetailsInner = (
     <>
       <div className={`space-y-3 rounded-lg border ${isFloating ? "p-3" : "p-4"}`}>
+        <TelemedicineProviderSelect
+          value={videoProviderId}
+          onChange={(provider) => {
+            setSession({ ...session, provider })
+            if (!isZoomProvider(provider)) setShowEmbeddedZoom(false)
+          }}
+          variant="compact"
+          label="Video platform"
+        />
         <div className="flex flex-wrap items-center justify-between gap-2">
           <Label className={`font-semibold ${isFloating ? "text-sm" : "text-base"}`}>
             {meetingLinkFieldLabel(videoProviderId)}
@@ -388,7 +406,7 @@ export function TelemedicineSessionPanel({
           placeholder={
             isZoomProvider(videoProviderId)
               ? "https://zoom.us/j/… or https://us02web.zoom.us/j/…"
-              : "https://… (paste the join link from your video app)"
+              : providerOption?.placeholder || "https://… (paste the join link from your video app)"
           }
           value={zoomJoinUrl}
           onChange={(e) => setZoomJoinUrl(e.target.value)}
@@ -405,9 +423,24 @@ export function TelemedicineSessionPanel({
             className={isFloating ? "text-sm" : undefined}
           />
         </div>
-        <Button type="button" variant="secondary" size={isFloating ? "sm" : "default"} onClick={handleSaveZoomLink} disabled={savingLink}>
-          {savingLink ? "Saving…" : "Save link"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="secondary" size={isFloating ? "sm" : "default"} onClick={handleSaveZoomLink} disabled={savingLink}>
+            {savingLink ? "Saving…" : "Save link"}
+          </Button>
+          {externalMeetingHref && (
+            <Button type="button" variant="outline" size={isFloating ? "sm" : "default"} asChild>
+              <a href={externalMeetingHref} target="_blank" rel="noreferrer">
+                <ExternalLink className="mr-2 h-4 w-4" />
+                Open {getTelemedicineProviderLabel(videoProviderId)}
+              </a>
+            </Button>
+          )}
+        </div>
+        {!isZoomProvider(videoProviderId) && (
+          <p className="text-xs text-muted-foreground">
+            {getTelemedicineProviderLabel(videoProviderId)} opens in a separate browser tab. HMIS stores and shares the link; it does not embed Meet in-page.
+          </p>
+        )}
       </div>
 
       <Collapsible open={consentSectionOpen} onOpenChange={setConsentSectionOpen}>
@@ -525,6 +558,9 @@ export function TelemedicineSessionPanel({
               <div className="flex min-h-0 shrink-0 items-center gap-1 overflow-x-auto border-b border-border/30 py-1">
                 <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[10px] font-normal" title="Session status">
                   {session.status}
+                </Badge>
+                <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px] font-normal" title="Video platform">
+                  {getTelemedicineProviderLabel(videoProviderId)}
                 </Badge>
                 {isZoomProvider(videoProviderId) &&
                   sdkEmbedConfigured &&

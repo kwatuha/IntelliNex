@@ -238,7 +238,7 @@ export const navigationCategories: NavigationCategory[] = [
         title: "Telemedicine",
         icon: Video,
         href: "/telemedicine",
-        description: "Remote video visits (Zoom link mode)",
+        description: "Remote video visits (Zoom, Google Meet, and link mode)",
         group: "Support & outreach",
       },
     ],

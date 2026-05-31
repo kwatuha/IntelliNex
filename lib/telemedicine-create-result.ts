@@ -4,9 +4,15 @@ export function isTelemedicineReusedSession(created: { reusedExistingSession?: b
 }
 
 export function telemedicineCreateToast(
-  created: { reusedExistingSession?: boolean } | null | undefined,
+  created: { reusedExistingSession?: boolean; providerSwitched?: boolean; provider?: string } | null | undefined,
   defaults: { title: string; description: string },
 ): { title: string; description: string } {
+  if (created?.providerSwitched) {
+    return {
+      title: "Video platform switched",
+      description: "This patient already had an active telemedicine session, so HMIS switched that same visit to the selected platform.",
+    }
+  }
   if (isTelemedicineReusedSession(created)) {
     return {
       title: "Joined existing visit",

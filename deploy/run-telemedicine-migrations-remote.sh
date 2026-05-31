@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Run telemedicine SQL migrations (40–43) on the REMOTE server (e.g. 41.89.173.8)
+# Run telemedicine SQL migrations (40–43 + 49) on the REMOTE server (e.g. 41.89.173.8)
 # =============================================================================
 # 1) Copies SQL files to /tmp on the server via scp
 # 2) SSH runs docker exec mysql (root) inside kiplombe_mysql, reading MYSQL_ROOT_PASSWORD
@@ -36,8 +36,9 @@ SQL40="$REPO_ROOT/api/database/migrations/40_telemedicine_sessions_schema.sql"
 SQL41="$REPO_ROOT/api/database/migrations/41_telemedicine_zoom_manual.sql"
 SQL42="$REPO_ROOT/api/database/migrations/42_user_telemedicine_defaults.sql"
 SQL43="$REPO_ROOT/api/database/migrations/43_telemedicine_queue_origin.sql"
+SQL49="$REPO_ROOT/api/database/migrations/49_telemedicine_video_providers.sql"
 
-for f in "$SQL40" "$SQL41" "$SQL42" "$SQL43"; do
+for f in "$SQL40" "$SQL41" "$SQL42" "$SQL43" "$SQL49"; do
   if [[ ! -f "$f" ]]; then
     echo "❌ Missing: $f"
     exit 1
@@ -73,6 +74,8 @@ scp -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no \
   "$SQL42" "${SSH_USER}@${SERVER_IP}:${REMOTE_TMP}/42.sql"
 scp -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no \
   "$SQL43" "${SSH_USER}@${SERVER_IP}:${REMOTE_TMP}/43.sql"
+scp -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no \
+  "$SQL49" "${SSH_USER}@${SERVER_IP}:${REMOTE_TMP}/49.sql"
 
 echo "📥 Running migrations inside Docker MySQL on server..."
 # shellcheck disable=SC2029
@@ -97,6 +100,7 @@ for d in "\$HOME/kiplombe-hmis" "\$HOME/kiplombehmis" "\$HOME/dev/kiplombehmis";
 done
 
 MYSQL_ROOT_PASSWORD="\${MYSQL_ROOT_PASSWORD:-\$FALLBACK_PW}"
+DB_NAME="\${MYSQL_DATABASE:-\$DB_NAME}"
 
 C="\$(docker ps --format '{{.Names}}' | grep -E 'mysql|MariaDB' | head -1)"
 if [ -z "\$C" ]; then
@@ -115,10 +119,11 @@ run_one 40 "40_telemedicine_sessions_schema.sql"
 run_one 41 "41_telemedicine_zoom_manual.sql"
 run_one 42 "42_user_telemedicine_defaults.sql"
 run_one 43 "43_telemedicine_queue_origin.sql"
+run_one 49 "49_telemedicine_video_providers.sql"
 
 rm -rf "\$REMOTE_TMP"
 echo "   (removed \$REMOTE_TMP)"
 REMOTE_EOF
 
 echo ""
-echo "✅ Telemedicine migrations 40–43 finished on remote (${DB_NAME})."
+echo "✅ Telemedicine migrations 40–43 + 49 finished on remote (${DB_NAME})."

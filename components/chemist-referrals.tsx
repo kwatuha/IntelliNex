@@ -145,13 +145,27 @@ export function ChemistReferrals() {
   const updateItem = async (referralId: number, item: any) => {
     const key = String(item.referralItemId)
     const draft = itemDrafts[key] || {}
+    const status = draft.status || "picked_up"
+    const pickedNow = draft.quantityPicked
+    const remaining = remainingQuantity(item)
     try {
       setSavingItem(key)
       setError(null)
+      if (isDrugPickupStatus(item, status)) {
+        const pickedNumber = Number(pickedNow)
+        if (!Number.isInteger(pickedNumber) || pickedNumber <= 0) {
+          setError("Enter the quantity being picked now.")
+          return
+        }
+        if (pickedNumber > remaining) {
+          setError(`Picked quantity cannot exceed the remaining balance of ${remaining}.`)
+          return
+        }
+      }
       await pharmacyApi.updateExternalReferralItem(String(referralId), key, {
         itemType: item.itemType || "drug",
-        status: draft.status || "picked_up",
-        quantityPicked: draft.quantityPicked || item.quantityReferred || 1,
+        status,
+        quantityPicked: pickedNow,
         chemistNotes: draft.chemistNotes,
         externalResultSummary: draft.externalResultSummary,
       })
@@ -210,6 +224,18 @@ export function ChemistReferrals() {
     return "secondary"
   }
 
+  const remainingQuantity = (item: any) => {
+    const referred = Number(item.quantityReferred || 0)
+    const picked = Number(item.quantityPicked || 0)
+    const balance = item.quantityBalance !== undefined && item.quantityBalance !== null
+      ? Number(item.quantityBalance)
+      : referred - picked
+    return Math.max(Number.isFinite(balance) ? balance : 0, 0)
+  }
+
+  const isDrugPickupStatus = (item: any, status?: string) =>
+    item.itemType !== "lab" && ["picked_up", "partially_picked"].includes(status || "")
+
   const filteredReferrals = useMemo(() => {
     const q = search.trim().toLowerCase()
     return referrals.filter((referral) => {
@@ -255,13 +281,26 @@ export function ChemistReferrals() {
   const setItemStatus = async (referralId: number, item: any, status: string, quantityPicked?: number) => {
     const key = String(item.referralItemId)
     const draft = itemDrafts[key] || {}
+    const pickedNow = quantityPicked ?? (draft.quantityPicked ? Number(draft.quantityPicked) : undefined)
+    const remaining = remainingQuantity(item)
     try {
       setSavingItem(`${key}:${status}`)
       setError(null)
+      if (isDrugPickupStatus(item, status)) {
+        const pickedNumber = pickedNow ?? remaining
+        if (!Number.isInteger(pickedNumber) || pickedNumber <= 0) {
+          setError("Enter the quantity being picked now.")
+          return
+        }
+        if (pickedNumber > remaining) {
+          setError(`Picked quantity cannot exceed the remaining balance of ${remaining}.`)
+          return
+        }
+      }
       await pharmacyApi.updateExternalReferralItem(String(referralId), key, {
         itemType: item.itemType || "drug",
         status,
-        quantityPicked: quantityPicked ?? draft.quantityPicked ?? item.quantityPicked ?? item.quantityReferred ?? 1,
+        quantityPicked: isDrugPickupStatus(item, status) ? (pickedNow ?? remaining) : (pickedNow ?? 0),
         chemistNotes: draft.chemistNotes ?? item.chemistNotes ?? "",
         externalResultSummary: draft.externalResultSummary ?? item.externalResultSummary ?? "",
       })
@@ -626,12 +665,13 @@ export function ChemistReferrals() {
                       const key = String(item.referralItemId)
                       const draft = itemDrafts[key] || {}
                       const hasLabResult = Boolean(String(draft.externalResultSummary ?? item.externalResultSummary ?? "").trim())
+                      const balance = remainingQuantity(item)
                       return (
                         <TableRow key={key}>
                           <TableCell>
                             <div className="font-medium">{itemLabel(item)}</div>
                             <div className="text-xs text-muted-foreground">
-                              {item.itemType === "lab" ? "Lab referral" : `Qty referred ${item.quantityReferred || 1}`} | Current: {statusLabel(item.status)}
+                              {item.itemType === "lab" ? "Lab referral" : `Qty referred ${item.quantityReferred || 1}, balance ${balance}`} | Current: {statusLabel(item.status)}
                             </div>
                             {actorName(item) && (
                               <div className="text-xs text-muted-foreground">
@@ -671,14 +711,20 @@ export function ChemistReferrals() {
                                 </select>
                                 {item.itemType !== "lab" && (
                                   <div className="space-y-1">
-                                    <Label className="text-xs">Qty picked</Label>
+                                    <Label className="text-xs">Qty picked now</Label>
                                     <Input
                                       className="h-9"
                                       type="number"
-                                      min="0"
-                                      value={draft.quantityPicked ?? item.quantityPicked ?? ""}
+                                      min="1"
+                                      max={balance || undefined}
+                                      placeholder={balance ? `Remaining ${balance}` : "Fully picked"}
+                                      value={draft.quantityPicked ?? ""}
                                       onChange={(event) => setDraft(key, { quantityPicked: event.target.value })}
+                                      disabled={balance <= 0}
                                     />
+                                    <div className="text-[11px] text-muted-foreground">
+                                      Already picked {item.quantityPicked ?? 0}; remaining {balance}
+                                    </div>
                                   </div>
                                 )}
                               </div>
@@ -687,7 +733,7 @@ export function ChemistReferrals() {
                                 <Badge variant="secondary">{statusLabel(item.status)}</Badge>
                                 {item.itemType !== "lab" && (
                                   <div className="text-xs text-muted-foreground">
-                                    Picked {item.quantityPicked ?? 0} of {item.quantityReferred || 1}
+                                    Picked {item.quantityPicked ?? 0} of {item.quantityReferred || 1}; balance {balance}
                                   </div>
                                 )}
                               </div>
@@ -754,8 +800,8 @@ export function ChemistReferrals() {
                                   )}
                                   <Button
                                     size="sm"
-                                    onClick={() => setItemStatus(referral.referralId, item, item.itemType === "lab" ? "in_progress" : "picked_up", item.itemType === "lab" ? 0 : item.quantityReferred || 1)}
-                                    disabled={savingItem === `${key}:${item.itemType === "lab" ? "in_progress" : "picked_up"}`}
+                                    onClick={() => setItemStatus(referral.referralId, item, item.itemType === "lab" ? "in_progress" : "picked_up", item.itemType === "lab" ? 0 : balance)}
+                                    disabled={savingItem === `${key}:${item.itemType === "lab" ? "in_progress" : "picked_up"}` || (item.itemType !== "lab" && balance <= 0)}
                                   >
                                     {item.itemType === "lab" ? "In progress" : "Picked"}
                                   </Button>

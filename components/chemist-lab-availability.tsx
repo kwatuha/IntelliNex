@@ -10,7 +10,6 @@ import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { FlaskConical, Loader2, Plus, Search, Trash2 } from "lucide-react"
-import Link from "next/link"
 import { useAuth } from "@/lib/auth/auth-context"
 import { laboratoryApi, pharmacyApi } from "@/lib/api"
 
@@ -233,9 +232,6 @@ export function ChemistLabAvailability() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" asChild>
-            <Link href="/chemist/drugs">View Drug Availability</Link>
-          </Button>
           {!canManageAvailability && (
             <select
               className="h-10 rounded-md border border-input bg-background px-3 text-sm"

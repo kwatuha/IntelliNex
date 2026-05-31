@@ -390,6 +390,11 @@ export const pharmacyApi = {
   deleteExternalChemistDrug: (chemistId: string, chemistDrugId: string) =>
     apiRequest<any>(`/api/pharmacy/external-chemists/${chemistId}/drugs/${chemistDrugId}`, { method: 'DELETE' }),
 
+  getExternalChemistDrugMovements: (chemistId: string, chemistDrugId: string, limit = 100) =>
+    apiRequest<any[]>(
+      `/api/pharmacy/external-chemists/${chemistId}/drugs/${chemistDrugId}/movements?${new URLSearchParams({ limit: String(limit) })}`
+    ),
+
   getExternalChemistLabs: (chemistId: string, filters?: { search?: string; status?: string }) => {
     const params = new URLSearchParams()
     if (filters?.search) params.append('search', filters.search)
@@ -456,8 +461,11 @@ export const pharmacyApi = {
   updateChemistStockAlert: (alertId: string, data: any) =>
     apiRequest<any>(`/api/pharmacy/chemist/alerts/${alertId}`, { method: 'PATCH', body: data }),
 
-  getChemistUsers: () =>
-    apiRequest<any[]>('/api/pharmacy/chemist/users'),
+  getChemistUsers: (filters?: { chemistId?: string }) => {
+    const params = new URLSearchParams()
+    if (filters?.chemistId) params.append('chemistId', filters.chemistId)
+    return apiRequest<any[]>(`/api/pharmacy/chemist/users?${params.toString()}`)
+  },
 
   createChemistUser: (data: any) =>
     apiRequest<any>('/api/pharmacy/chemist/users', { method: 'POST', body: data }),
@@ -1111,8 +1119,8 @@ export const telemedicineApi = {
   getSession: (sessionId: string) =>
     apiRequest<any>(`/api/telemedicine/sessions/${sessionId}`),
 
-  /** Save or update pasted Zoom meeting link + optional password */
-  updateSessionLink: (sessionId: string, data: { zoomJoinUrl?: string | null; zoomPassword?: string | null }) =>
+  /** Save or update pasted meeting link, optional password, and provider */
+  updateSessionLink: (sessionId: string, data: { zoomJoinUrl?: string | null; zoomPassword?: string | null; provider?: string; videoProvider?: string }) =>
     apiRequest<any>(`/api/telemedicine/sessions/${sessionId}/link`, {
       method: 'PATCH',
       body: data,

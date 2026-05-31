@@ -31,7 +31,7 @@ import {
   TelemedicineOptionalMeetingLinkFields,
   telemedicineOptionalLinkBody,
 } from "@/components/telemedicine-optional-meeting-link-fields"
-import type { TelemedicineVideoProviderId } from "@/lib/telemedicine-providers"
+import { isZoomProvider, type TelemedicineVideoProviderId } from "@/lib/telemedicine-providers"
 import { telemedicineCreateToast } from "@/lib/telemedicine-create-result"
 import { TelemedicineZoomDefaultsRequiredBanner } from "@/components/telemedicine-zoom-defaults-banner"
 import { useTelemedicineZoomDefaults } from "@/lib/hooks/use-telemedicine-zoom-defaults"
@@ -49,7 +49,6 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
   const { user } = useAuth()
   const { openSession: openTelemedicineFloating } = useTelemedicineFloating()
   const { loading: zoomDefaultsLoading, hasDefaults: hasZoomDefaults } = useTelemedicineZoomDefaults()
-  const canStartNewTelemedicineVisit = !zoomDefaultsLoading && hasZoomDefaults
   const currentRoleName = String((user as any)?.role || (user as any)?.roleName || "").toLowerCase()
   const canApproveBillAdjustments =
     currentRoleName.includes("admin") ||
@@ -84,6 +83,10 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
   const [telemedicineVideoProvider, setTelemedicineVideoProvider] = useState<TelemedicineVideoProviderId>("zoom_manual")
   const [telemedicineMeetingUrl, setTelemedicineMeetingUrl] = useState("")
   const [telemedicineMeetingPasscode, setTelemedicineMeetingPasscode] = useState("")
+  const selectedProviderNeedsZoomDefaults =
+    isZoomProvider(telemedicineVideoProvider) && !telemedicineMeetingUrl.trim()
+  const canStartNewTelemedicineVisit =
+    !selectedProviderNeedsZoomDefaults || (!zoomDefaultsLoading && hasZoomDefaults)
   const telemedicineInFlightRef = useRef(false)
 
   // Clear stuck "Starting…" when the admission dialog closes (parent may unmount without intermediate open=false)
@@ -730,8 +733,8 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
   const handleStartTelemedicine = async () => {
     if (!canStartNewTelemedicineVisit) {
       toast({
-        title: "Meeting defaults required",
-        description: "Save Telemedicine → My Zoom defaults before starting a new visit, or join an active visit from Telemedicine.",
+        title: "Meeting link required",
+        description: "Save Telemedicine → My Zoom defaults, paste a Zoom link, or choose Google Meet and paste a Meet link.",
         variant: "destructive",
       })
       return
@@ -4787,7 +4790,9 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3 pt-1">
-              <TelemedicineZoomDefaultsRequiredBanner loading={zoomDefaultsLoading} hasDefaults={hasZoomDefaults} startActionLabel="Start Telemedicine" />
+              {isZoomProvider(telemedicineVideoProvider) && (
+                <TelemedicineZoomDefaultsRequiredBanner loading={zoomDefaultsLoading} hasDefaults={hasZoomDefaults} startActionLabel="Start Telemedicine" />
+              )}
               <TelemedicineProviderSelect
                 variant="compact"
                 label="Video platform"
@@ -4816,10 +4821,10 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
                     e.stopPropagation()
                     void handleStartTelemedicine()
                   }}
-                  disabled={startingTelemedicine || zoomDefaultsLoading || !canStartNewTelemedicineVisit}
+                  disabled={startingTelemedicine || (selectedProviderNeedsZoomDefaults && zoomDefaultsLoading) || !canStartNewTelemedicineVisit}
                   title={
                     !canStartNewTelemedicineVisit && !zoomDefaultsLoading
-                      ? "Save Telemedicine → My Zoom defaults before starting a new visit"
+                      ? "Save Telemedicine → My Zoom defaults or paste a meeting link before starting"
                       : "Start a remote doctor review linked to this admission"
                   }
                 >

@@ -7,7 +7,7 @@
  *
  * Or manually:
  *   mysql -u USER -p kiplombe_hmis < database/migrations/40_telemedicine_sessions_schema.sql
- *   … then 41, 42, 43 as needed (43 adds standalone origin for existing DBs; fresh 40 already includes it)
+ *   … then 41, 42, 43, 49 as needed (49 adds Meet/Teams/other provider enum values)
  */
 const mysql = require('mysql2/promise');
 const fs = require('fs');
@@ -65,7 +65,14 @@ async function run() {
     );
     console.log('Running 43_telemedicine_queue_origin.sql (queueEntryId + index) ...');
     await connection.query(sql43q);
-    console.log('✅ Done (telemedicine + queue origin).');
+
+    const sql49 = fs.readFileSync(
+      path.join(__dirname, '../database/migrations/49_telemedicine_video_providers.sql'),
+      'utf8'
+    );
+    console.log('Running 49_telemedicine_video_providers.sql (Zoom/Meet/Teams provider enum) ...');
+    await connection.query(sql49);
+    console.log('✅ Done (telemedicine + queue origin + video providers).');
   } catch (error) {
     console.error('❌ Migration failed:', error.message || error.code || error);
     if (error.code === 'ER_ACCESS_DENIED_ERROR') {

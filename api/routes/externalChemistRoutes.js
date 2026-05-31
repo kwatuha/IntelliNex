@@ -35,6 +35,57 @@ function normalizeTestName(value) {
   return normalizeDrugName(value);
 }
 
+function httpError(message, status = 400) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function parsePositiveInteger(value, fieldName) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) {
+    throw httpError(`${fieldName} must be a positive whole number`, 400);
+  }
+  return number;
+}
+
+function quantityRequiredForPrescriptionItem(item) {
+  const quantity = Number(item.quantity ?? item.quantityReferred ?? 1);
+  return Number.isFinite(quantity) && quantity > 0 ? Math.ceil(quantity) : 1;
+}
+
+function availabilityStatusForQuantity(quantity, minimumStockLevel = 0) {
+  const current = Number(quantity) || 0;
+  const minimum = Number(minimumStockLevel) || 0;
+  if (current <= 0) return 'out_of_stock';
+  if (minimum > 0 && current <= minimum) return 'low_stock';
+  return 'available';
+}
+
+async function recordStockMovement(executor, movement) {
+  if (!movement?.chemistDrugId || !movement?.chemistId || !Number(movement.quantityChange)) return;
+  await executor.execute(
+    `INSERT INTO external_chemist_stock_movements (
+      chemistDrugId, chemistId, movementType, quantityChange, quantityBefore, quantityAfter,
+      referenceType, referenceId, referralId, referralItemId, actorUserId, notes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      movement.chemistDrugId,
+      movement.chemistId,
+      movement.movementType,
+      movement.quantityChange,
+      movement.quantityBefore,
+      movement.quantityAfter,
+      movement.referenceType || null,
+      movement.referenceId || null,
+      movement.referralId || null,
+      movement.referralItemId || null,
+      movement.actorUserId || null,
+      movement.notes || null,
+    ]
+  );
+}
+
 async function getChemistScopeForUser(userId) {
   if (!userId) return null;
   const [rows] = await pool.execute(
@@ -123,7 +174,7 @@ async function resolveChemistIdForRequest(req, requestedChemistId = null) {
   return Number(requestedChemistId);
 }
 
-async function fetchChemistDrugs(chemistId, filters = {}) {
+async function fetchChemistDrugs(chemistId, filters = {}, executor = pool, options = {}) {
   const params = [chemistId];
   let query = `
     SELECT cda.*, m.name AS catalogMedicationName, m.medicationCode, m.dosageForm AS catalogDosageForm,
@@ -150,9 +201,72 @@ async function fetchChemistDrugs(chemistId, filters = {}) {
   query += ` ORDER BY
     FIELD(cda.availabilityStatus, 'available', 'low_stock', 'unknown', 'out_of_stock'),
     cda.medicationName ASC`;
+  if (options.lockForUpdate) {
+    query += ' FOR UPDATE';
+  }
 
-  const [rows] = await pool.execute(query, params);
+  const [rows] = await executor.execute(query, params);
   return rows;
+}
+
+async function attachOutstandingDrugReservations(executor, chemistId, availabilityRows) {
+  if (!availabilityRows.length) return availabilityRows;
+
+  const [reservedRows] = await executor.execute(
+    `SELECT
+       ri.chemistDrugId,
+       ri.medicationId,
+       ri.medicationName,
+       SUM(GREATEST(
+         COALESCE(ri.quantityBalance, COALESCE(ri.quantityReferred, 0) - COALESCE(ri.quantityPicked, 0)),
+         0
+       )) AS reservedQuantity
+     FROM prescription_external_referral_items ri
+     INNER JOIN prescription_external_referrals r ON ri.referralId = r.referralId
+     WHERE r.chemistId = ?
+       AND r.referralType = 'drug'
+       AND r.status NOT IN ('picked_up', 'completed', 'not_picked', 'cancelled')
+       AND ri.status NOT IN ('picked_up', 'not_available', 'not_picked', 'cancelled')
+     GROUP BY ri.chemistDrugId, ri.medicationId, ri.medicationName`,
+    [chemistId]
+  );
+
+  return availabilityRows.map((row) => {
+    const reservedQuantity = reservedRows.reduce((total, reserved) => {
+      if (reserved.chemistDrugId && Number(reserved.chemistDrugId) === Number(row.chemistDrugId)) {
+        return total + Number(reserved.reservedQuantity || 0);
+      }
+      if (!reserved.chemistDrugId && reserved.medicationId && row.medicationId && Number(reserved.medicationId) === Number(row.medicationId)) {
+        return total + Number(reserved.reservedQuantity || 0);
+      }
+      if (!reserved.chemistDrugId && !reserved.medicationId) {
+        const reservedName = normalizeDrugName(reserved.medicationName);
+        const rowNames = [row.medicationName, row.genericName, row.catalogMedicationName, row.catalogGenericName]
+          .map(normalizeDrugName)
+          .filter(Boolean);
+        if (reservedName && rowNames.includes(reservedName)) {
+          return total + Number(reserved.reservedQuantity || 0);
+        }
+      }
+      return total;
+    }, 0);
+    const quantityAvailable = Number(row.quantityAvailable || 0);
+    return {
+      ...row,
+      reservedQuantity,
+      availableForReferral: Math.max(quantityAvailable - reservedQuantity, 0),
+    };
+  });
+}
+
+async function lockChemistDrugAvailabilityRows(connection, chemistId) {
+  await connection.execute(
+    `SELECT chemistDrugId
+     FROM external_chemist_drug_availability
+     WHERE chemistId = ? AND isActive = 1
+     FOR UPDATE`,
+    [chemistId]
+  );
 }
 
 async function fetchChemistLabs(chemistId, filters = {}) {
@@ -271,11 +385,11 @@ async function upsertChemistDrug(executor, chemistId, data, options = {}) {
 
   const [existing] = medicationId
     ? await executor.execute(
-        'SELECT chemistDrugId FROM external_chemist_drug_availability WHERE chemistId = ? AND medicationId = ? LIMIT 1',
+        'SELECT chemistDrugId, quantityAvailable FROM external_chemist_drug_availability WHERE chemistId = ? AND medicationId = ? LIMIT 1',
         [chemistId, medicationId]
       )
     : await executor.execute(
-        `SELECT chemistDrugId FROM external_chemist_drug_availability
+        `SELECT chemistDrugId, quantityAvailable FROM external_chemist_drug_availability
          WHERE chemistId = ? AND LOWER(TRIM(medicationName)) = LOWER(TRIM(?)) LIMIT 1`,
         [chemistId, medicationName]
       );
@@ -300,6 +414,8 @@ async function upsertChemistDrug(executor, chemistId, data, options = {}) {
   ];
 
   if (existing.length) {
+    const quantityBefore = Number(existing[0].quantityAvailable) || 0;
+    const quantityAfter = Number(data.quantityAvailable ?? 0) || 0;
     await executor.execute(
       `UPDATE external_chemist_drug_availability SET
         medicationId = ?, medicationName = ?, brandName = ?, genericName = ?, strength = ?, dosageForm = ?,
@@ -309,9 +425,24 @@ async function upsertChemistDrug(executor, chemistId, data, options = {}) {
        WHERE chemistDrugId = ? AND chemistId = ?`,
       [...values, existing[0].chemistDrugId, chemistId]
     );
+    const delta = quantityAfter - quantityBefore;
+    if (delta !== 0) {
+      await recordStockMovement(executor, {
+        chemistDrugId: existing[0].chemistDrugId,
+        chemistId,
+        movementType: options.imported ? 'import' : delta > 0 ? 'adjustment_in' : 'adjustment_out',
+        quantityChange: delta,
+        quantityBefore,
+        quantityAfter,
+        referenceType: options.imported ? 'bulk_import' : 'availability_update',
+        actorUserId: options.actorUserId,
+        notes: data.notes || null,
+      });
+    }
     return existing[0].chemistDrugId;
   }
 
+  const initialQuantity = Number(data.quantityAvailable ?? 0) || 0;
   const [result] = await executor.execute(
     `INSERT INTO external_chemist_drug_availability (
       chemistId, medicationId, medicationName, brandName, genericName, strength, dosageForm, packSize,
@@ -338,6 +469,19 @@ async function upsertChemistDrug(executor, chemistId, data, options = {}) {
       data.notes || null,
     ]
   );
+  if (initialQuantity !== 0) {
+    await recordStockMovement(executor, {
+      chemistDrugId: result.insertId,
+      chemistId,
+      movementType: options.imported ? 'import' : 'initial',
+      quantityChange: initialQuantity,
+      quantityBefore: 0,
+      quantityAfter: initialQuantity,
+      referenceType: options.imported ? 'bulk_import' : 'availability_create',
+      actorUserId: options.actorUserId,
+      notes: data.notes || null,
+    });
+  }
   return result.insertId;
 }
 
@@ -427,6 +571,8 @@ function matchAvailabilityForPrescriptionItem(item, availabilityRows) {
     availabilityStatus: match.availabilityStatus,
     displayStatus: stale ? 'stale' : match.availabilityStatus,
     quantityAvailable: match.quantityAvailable ?? 0,
+    reservedQuantity: match.reservedQuantity ?? 0,
+    availableForReferral: match.availableForReferral ?? match.quantityAvailable ?? 0,
     unitPrice: match.unitPrice,
     expiryDate: match.expiryDate,
     lastConfirmedAt: match.lastConfirmedAt,
@@ -538,7 +684,7 @@ function buildReferralSelect(whereClause = '1=1') {
            p.prescriptionNumber, p.prescriptionDate,
            lo.orderNumber AS labOrderNumber, lo.orderDate AS labOrderDate, lo.priority AS labPriority,
            pt.patientNumber, pt.firstName AS patientFirstName, pt.lastName AS patientLastName, pt.phone AS patientPhone,
-           dr.firstName AS doctorFirstName, dr.lastName AS doctorLastName,
+           dr.firstName AS doctorFirstName, dr.lastName AS doctorLastName, dr.username AS doctorUsername,
            rb.firstName AS referredByFirstName, rb.lastName AS referredByLastName, rb.username AS referredByUsername
     FROM prescription_external_referrals r
     INNER JOIN external_chemists ec ON r.chemistId = ec.chemistId
@@ -646,13 +792,14 @@ router.get('/external-chemists/:chemistId/drugs', async (req, res) => {
 router.post('/external-chemists/:chemistId/drugs', async (req, res) => {
   try {
     const chemistId = await resolveChemistIdForRequest(req, req.params.chemistId);
+    const authUser = getAuthUser(req);
     if (!chemistId) return res.status(400).json({ error: 'chemistId is required' });
     const data = req.body || {};
     if (!data.medicationName && !data.medicationId) {
       return res.status(400).json({ error: 'medicationName or medicationId is required' });
     }
 
-    const id = await upsertChemistDrug(pool, chemistId, data);
+    const id = await upsertChemistDrug(pool, chemistId, data, { actorUserId: authUser?.id || authUser?.userId || null });
     const [rows] = await pool.execute(
       'SELECT * FROM external_chemist_drug_availability WHERE chemistId = ? AND chemistDrugId = ?',
       [chemistId, id]
@@ -668,6 +815,7 @@ router.post('/external-chemists/:chemistId/drugs/bulk', async (req, res) => {
   const connection = await pool.getConnection();
   try {
     const chemistId = await resolveChemistIdForRequest(req, req.params.chemistId);
+    const authUser = getAuthUser(req);
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
     if (!chemistId) return res.status(400).json({ error: 'chemistId is required' });
     if (!rows.length) return res.status(400).json({ error: 'No rows supplied for import' });
@@ -682,7 +830,7 @@ router.post('/external-chemists/:chemistId/drugs/bulk', async (req, res) => {
           errors.push({ row: index + 1, message: 'Medication name is required' });
           continue;
         }
-        await upsertChemistDrug(connection, chemistId, row, { imported: true });
+        await upsertChemistDrug(connection, chemistId, row, { imported: true, actorUserId: authUser?.id || authUser?.userId || null });
         imported += 1;
       } catch (error) {
         errors.push({ row: index + 1, message: error.message });
@@ -703,7 +851,15 @@ router.post('/external-chemists/:chemistId/drugs/bulk', async (req, res) => {
 router.put('/external-chemists/:chemistId/drugs/:chemistDrugId', async (req, res) => {
   try {
     const chemistId = await resolveChemistIdForRequest(req, req.params.chemistId);
+    const authUser = getAuthUser(req);
     const data = req.body || {};
+    const [beforeRows] = await pool.execute(
+      'SELECT chemistDrugId, quantityAvailable FROM external_chemist_drug_availability WHERE chemistDrugId = ? AND chemistId = ?',
+      [req.params.chemistDrugId, chemistId]
+    );
+    if (!beforeRows.length) return res.status(404).json({ error: 'Drug availability record not found' });
+    const quantityBefore = Number(beforeRows[0].quantityAvailable) || 0;
+    const quantityAfter = Number(data.quantityAvailable ?? 0) || 0;
     await pool.execute(
       `UPDATE external_chemist_drug_availability SET
         medicationId = ?, medicationName = ?, brandName = ?, genericName = ?, strength = ?, dosageForm = ?,
@@ -736,6 +892,20 @@ router.put('/external-chemists/:chemistId/drugs/:chemistDrugId', async (req, res
       'SELECT * FROM external_chemist_drug_availability WHERE chemistDrugId = ? AND chemistId = ?',
       [req.params.chemistDrugId, chemistId]
     );
+    const delta = quantityAfter - quantityBefore;
+    if (delta !== 0) {
+      await recordStockMovement(pool, {
+        chemistDrugId: Number(req.params.chemistDrugId),
+        chemistId,
+        movementType: delta > 0 ? 'adjustment_in' : 'adjustment_out',
+        quantityChange: delta,
+        quantityBefore,
+        quantityAfter,
+        referenceType: 'availability_update',
+        actorUserId: authUser?.id || authUser?.userId || null,
+        notes: data.notes || null,
+      });
+    }
     res.json(rows[0]);
   } catch (error) {
     console.error('Error updating chemist drug:', error);
@@ -746,14 +916,67 @@ router.put('/external-chemists/:chemistId/drugs/:chemistDrugId', async (req, res
 router.delete('/external-chemists/:chemistId/drugs/:chemistDrugId', async (req, res) => {
   try {
     const chemistId = await resolveChemistIdForRequest(req, req.params.chemistId);
-    await pool.execute(
-      'UPDATE external_chemist_drug_availability SET isActive = 0, updatedAt = NOW() WHERE chemistDrugId = ? AND chemistId = ?',
+    const authUser = getAuthUser(req);
+    const [beforeRows] = await pool.execute(
+      'SELECT chemistDrugId, quantityAvailable FROM external_chemist_drug_availability WHERE chemistDrugId = ? AND chemistId = ?',
       [req.params.chemistDrugId, chemistId]
     );
+    if (!beforeRows.length) return res.status(404).json({ error: 'Drug availability record not found' });
+    const quantityBefore = Number(beforeRows[0].quantityAvailable) || 0;
+    await pool.execute(
+      `UPDATE external_chemist_drug_availability
+       SET quantityAvailable = 0, availabilityStatus = 'out_of_stock', isActive = 0, updatedAt = NOW()
+       WHERE chemistDrugId = ? AND chemistId = ?`,
+      [req.params.chemistDrugId, chemistId]
+    );
+    if (quantityBefore !== 0) {
+      await recordStockMovement(pool, {
+        chemistDrugId: Number(req.params.chemistDrugId),
+        chemistId,
+        movementType: 'remove',
+        quantityChange: -quantityBefore,
+        quantityBefore,
+        quantityAfter: 0,
+        referenceType: 'availability_remove',
+        actorUserId: authUser?.id || authUser?.userId || null,
+      });
+    }
     res.json({ message: 'Drug removed from chemist availability list' });
   } catch (error) {
     console.error('Error deleting chemist drug:', error);
     res.status(error.status || 500).json({ error: 'Failed to delete chemist drug', message: error.message });
+  }
+});
+
+router.get('/external-chemists/:chemistId/drugs/:chemistDrugId/movements', async (req, res) => {
+  try {
+    const chemistId = await resolveChemistIdForRequest(req, req.params.chemistId);
+    const limit = Math.min(Number(req.query.limit) || 100, 250);
+    const [rows] = await pool.execute(
+      `SELECT sm.*,
+              u.firstName AS actorFirstName, u.lastName AS actorLastName, u.username AS actorUsername,
+              r.referralNumber,
+              ri.medicationName AS referralMedicationName,
+              ri.quantityReferred,
+              ri.quantityPicked AS referralQuantityPicked,
+              ri.quantityBalance,
+              p.prescriptionNumber,
+              pr.firstName AS prescribedByFirstName, pr.lastName AS prescribedByLastName, pr.username AS prescribedByUsername
+       FROM external_chemist_stock_movements sm
+       LEFT JOIN users u ON sm.actorUserId = u.userId
+       LEFT JOIN prescription_external_referrals r ON sm.referralId = r.referralId
+       LEFT JOIN prescription_external_referral_items ri ON sm.referralItemId = ri.referralItemId
+       LEFT JOIN prescriptions p ON r.prescriptionId = p.prescriptionId
+       LEFT JOIN users pr ON p.doctorId = pr.userId
+       WHERE sm.chemistId = ? AND sm.chemistDrugId = ?
+       ORDER BY sm.createdAt DESC, sm.movementId DESC
+       LIMIT ?`,
+      [chemistId, req.params.chemistDrugId, limit]
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching chemist stock movements:', error);
+    res.status(error.status || 500).json({ error: 'Failed to fetch stock movements', message: error.message });
   }
 });
 
@@ -1100,19 +1323,33 @@ router.get('/external-referrals/availability', async (req, res) => {
     itemQuery += ' ORDER BY pi.itemId ASC';
 
     const [items] = await pool.execute(itemQuery, itemParams);
-    const availabilityRows = await fetchChemistDrugs(chemistId);
-    const matchedItems = items.map((item) => ({
-      ...item,
-      availability: matchAvailabilityForPrescriptionItem(item, availabilityRows),
-    }));
+    const availabilityRows = await attachOutstandingDrugReservations(pool, chemistId, await fetchChemistDrugs(chemistId));
+    const matchedItems = items.map((item) => {
+      const availability = matchAvailabilityForPrescriptionItem(item, availabilityRows);
+      const requiredQuantity = quantityRequiredForPrescriptionItem(item);
+      return {
+        ...item,
+        requiredQuantity,
+        availability: {
+          ...availability,
+          hasEnoughQuantity: Number(availability.availableForReferral || 0) >= requiredQuantity,
+          quantityShortfall: Math.max(requiredQuantity - Number(availability.availableForReferral || 0), 0),
+        },
+      };
+    });
 
     const totals = {
       total: matchedItems.length,
-      available: matchedItems.filter((item) => item.availability.availabilityStatus === 'available' && !item.availability.stale).length,
+      available: matchedItems.filter((item) => (
+        ['available', 'low_stock'].includes(item.availability.availabilityStatus) &&
+        !item.availability.stale &&
+        item.availability.hasEnoughQuantity
+      )).length,
       lowStock: matchedItems.filter((item) => item.availability.availabilityStatus === 'low_stock' && !item.availability.stale).length,
       outOfStock: matchedItems.filter((item) => item.availability.availabilityStatus === 'out_of_stock' && !item.availability.stale).length,
       notListed: matchedItems.filter((item) => item.availability.availabilityStatus === 'not_listed').length,
       stale: matchedItems.filter((item) => item.availability.stale && item.availability.matched).length,
+      insufficientQuantity: matchedItems.filter((item) => item.availability.matched && !item.availability.hasEnoughQuantity).length,
     };
 
     res.json({
@@ -1229,6 +1466,31 @@ router.post('/external-referrals', async (req, res) => {
         return res.status(400).json({ error: 'No lab order items found for referral' });
       }
 
+      const labAvailabilityRows = await fetchChemistLabs(chemistId);
+      const unavailableLabItems = labItems
+        .map((item) => ({ item, availability: matchAvailabilityForLabItem(item, labAvailabilityRows) }))
+        .filter(({ availability }) => (
+          !availability.matched ||
+          availability.stale ||
+          availability.availabilityStatus !== 'available'
+        ));
+      if (unavailableLabItems.length) {
+        await connection.rollback();
+        const names = unavailableLabItems
+          .map(({ item }) => item.testName || item.catalogTestName || 'Lab test')
+          .join(', ');
+        return res.status(409).json({
+          error: `Selected lab test is not available in this chemist: ${names}`,
+          message: `Cannot refer unavailable lab test(s): ${names}`,
+          unavailableItems: unavailableLabItems.map(({ item, availability }) => ({
+            labOrderItemId: item.itemId,
+            testTypeId: item.testTypeId,
+            testName: item.testName || item.catalogTestName || 'Lab test',
+            availability,
+          })),
+        });
+      }
+
       const referralNumber = await nextReferralNumber(connection);
       const pickupCode = data.pickupCode || crypto.randomBytes(3).toString('hex').toUpperCase();
       const referredBy = user?.id || user?.userId || data.referredBy || null;
@@ -1300,7 +1562,51 @@ router.post('/external-referrals', async (req, res) => {
       await connection.rollback();
       return res.status(400).json({ error: 'No prescription items found for referral' });
     }
-    const availabilityRows = await fetchChemistDrugs(chemistId);
+    await lockChemistDrugAvailabilityRows(connection, chemistId);
+    const availabilityRows = await attachOutstandingDrugReservations(
+      connection,
+      chemistId,
+      await fetchChemistDrugs(chemistId, {}, connection)
+    );
+    const itemAvailability = items.map((item) => ({
+      item,
+      requiredQuantity: quantityRequiredForPrescriptionItem(item),
+      availability: matchAvailabilityForPrescriptionItem(item, availabilityRows),
+    }));
+    const unavailableDrugItems = itemAvailability.filter(({ requiredQuantity, availability }) => (
+      !availability.matched ||
+      availability.stale ||
+      !['available', 'low_stock'].includes(availability.availabilityStatus) ||
+      Number(availability.availableForReferral || 0) < requiredQuantity
+    ));
+    if (unavailableDrugItems.length) {
+      await connection.rollback();
+      const names = unavailableDrugItems
+        .map(({ item }) => item.medicationName || item.medicationNameFromCatalog || 'Medication')
+        .join(', ');
+      const details = unavailableDrugItems
+        .map(({ item, requiredQuantity, availability }) => {
+          const name = item.medicationName || item.medicationNameFromCatalog || 'Medication';
+          if (!availability.matched) return `${name} is not listed`;
+          if (availability.stale) return `${name} has a stale stock update`;
+          if (!['available', 'low_stock'].includes(availability.availabilityStatus)) return `${name} is ${availability.availabilityStatus}`;
+          return `${name} needs ${requiredQuantity}, available after unpicked referrals is ${availability.availableForReferral || 0}`;
+        })
+        .join('; ');
+      return res.status(409).json({
+        error: `Selected drug is not available or has insufficient quantity in this chemist: ${details || names}`,
+        message: `Cannot refer unavailable or insufficient drug(s): ${details || names}`,
+        unavailableItems: unavailableDrugItems.map(({ item, requiredQuantity, availability }) => ({
+          prescriptionItemId: item.itemId,
+          medicationId: item.medicationId,
+          medicationName: item.medicationName || item.medicationNameFromCatalog || 'Medication',
+          requiredQuantity,
+          availability,
+          reservedQuantity: availability.reservedQuantity || 0,
+          availableForReferral: availability.availableForReferral || 0,
+        })),
+      });
+    }
 
     const referralNumber = await nextReferralNumber(connection);
     const pickupCode = data.pickupCode || crypto.randomBytes(3).toString('hex').toUpperCase();
@@ -1324,25 +1630,26 @@ router.post('/external-referrals', async (req, res) => {
       ]
     );
 
-    for (const item of items) {
+    for (const { item, requiredQuantity, availability } of itemAvailability) {
       await connection.execute(
         `INSERT INTO prescription_external_referral_items (
-          referralId, prescriptionItemId, medicationId, medicationName, dosage, frequency, duration,
-          instructions, quantityReferred
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          referralId, prescriptionItemId, medicationId, chemistDrugId, medicationName, dosage, frequency, duration,
+          instructions, quantityReferred, quantityBalance
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           result.insertId,
           item.itemId,
           item.medicationId || null,
+          availability.chemistDrugId || null,
           item.medicationName || item.medicationNameFromCatalog || 'Medication',
           item.dosage || null,
           item.frequency || null,
           item.duration || null,
           item.instructions || null,
-          item.quantity || 1,
+          requiredQuantity,
+          requiredQuantity,
         ]
       );
-      const availability = matchAvailabilityForPrescriptionItem(item, availabilityRows);
       if (
         availability.availabilityStatus === 'not_listed' ||
         availability.availabilityStatus === 'out_of_stock' ||
@@ -1363,7 +1670,7 @@ router.post('/external-referrals', async (req, res) => {
   } catch (error) {
     await connection.rollback();
     console.error('Error creating external referral:', error);
-    res.status(500).json({ error: 'Failed to create external referral', message: error.message });
+    res.status(error.status || 500).json({ error: 'Failed to create external referral', message: error.message });
   } finally {
     connection.release();
   }
@@ -1474,22 +1781,146 @@ router.patch('/external-referrals/:id/items/:referralItemId', async (req, res) =
       return res.json(referral);
     }
 
-    const qty = quantityPicked === undefined || quantityPicked === null || quantityPicked === ''
-      ? null
-      : Number(quantityPicked);
-    const pickedAt = ['picked_up', 'partially_picked'].includes(status) ? ', pickedUpAt = COALESCE(pickedUpAt, NOW())' : '';
-    const dispensedAudit = ['picked_up', 'partially_picked'].includes(status)
-      ? ', dispensedBy = COALESCE(?, dispensedBy), dispensedAt = COALESCE(dispensedAt, NOW())'
-      : ', dispensedBy = dispensedBy, dispensedAt = dispensedAt';
+    const isPickupStatus = ['picked_up', 'partially_picked'].includes(status);
+    if (isPickupStatus) {
+      const pickupQty = parsePositiveInteger(quantityPicked, 'Picked quantity');
+      const [itemRows] = await connection.execute(
+        `SELECT ri.*, r.chemistId
+         FROM prescription_external_referral_items ri
+         INNER JOIN prescription_external_referrals r ON ri.referralId = r.referralId
+         WHERE ri.referralItemId = ? AND ri.referralId = ?
+         FOR UPDATE`,
+        [req.params.referralItemId, req.params.id]
+      );
+      if (!itemRows.length) {
+        throw httpError('Referral item not found', 404);
+      }
 
-    await connection.execute(
-      `UPDATE prescription_external_referral_items
-       SET status = ?, quantityPicked = COALESCE(?, quantityPicked), chemistNotes = ?, updatedAt = NOW()${pickedAt}${dispensedAudit}
-       WHERE referralItemId = ? AND referralId = ?`,
-      ['picked_up', 'partially_picked'].includes(status)
-        ? [status, qty, chemistNotes || null, actorId, req.params.referralItemId, req.params.id]
-        : [status, qty, chemistNotes || null, req.params.referralItemId, req.params.id]
-    );
+      const item = itemRows[0];
+      const quantityReferred = Number(item.quantityReferred) || 0;
+      const quantityAlreadyPicked = Number(item.quantityPicked) || 0;
+      const remainingQuantity = Math.max(quantityReferred - quantityAlreadyPicked, 0);
+      if (quantityReferred <= 0) {
+        throw httpError('Referral item does not have a valid prescribed quantity', 400);
+      }
+      if (remainingQuantity <= 0) {
+        throw httpError('This referral item has already been fully picked', 409);
+      }
+      if (pickupQty > remainingQuantity) {
+        throw httpError(`Picked quantity cannot exceed the remaining balance of ${remainingQuantity}`, 400);
+      }
+
+      let stockRows = [];
+      if (item.chemistDrugId) {
+        [stockRows] = await connection.execute(
+          `SELECT *
+           FROM external_chemist_drug_availability
+           WHERE chemistDrugId = ? AND chemistId = ? AND isActive = 1
+           FOR UPDATE`,
+          [item.chemistDrugId, item.chemistId]
+        );
+      }
+      if (!stockRows.length && item.medicationId) {
+        [stockRows] = await connection.execute(
+          `SELECT *
+           FROM external_chemist_drug_availability
+           WHERE chemistId = ? AND medicationId = ? AND isActive = 1
+           ORDER BY availabilityStatus = 'available' DESC, quantityAvailable DESC
+           LIMIT 1
+           FOR UPDATE`,
+          [item.chemistId, item.medicationId]
+        );
+      }
+      if (!stockRows.length) {
+        [stockRows] = await connection.execute(
+          `SELECT *
+           FROM external_chemist_drug_availability
+           WHERE chemistId = ? AND LOWER(TRIM(medicationName)) = LOWER(TRIM(?)) AND isActive = 1
+           ORDER BY availabilityStatus = 'available' DESC, quantityAvailable DESC
+           LIMIT 1
+           FOR UPDATE`,
+          [item.chemistId, item.medicationName]
+        );
+      }
+      if (!stockRows.length) {
+        throw httpError('No active chemist stock record was found for this medication', 409);
+      }
+
+      const stock = stockRows[0];
+      const quantityBefore = Number(stock.quantityAvailable) || 0;
+      if (quantityBefore < pickupQty) {
+        throw httpError(`Chemist stock is insufficient. Available quantity is ${quantityBefore}`, 409);
+      }
+
+      const quantityAfter = quantityBefore - pickupQty;
+      const cumulativeAfter = quantityAlreadyPicked + pickupQty;
+      const balanceAfter = Math.max(quantityReferred - cumulativeAfter, 0);
+      const itemStatus = balanceAfter === 0 ? 'picked_up' : 'partially_picked';
+      const stockStatus = availabilityStatusForQuantity(quantityAfter, stock.minimumStockLevel);
+
+      await connection.execute(
+        `UPDATE external_chemist_drug_availability
+         SET quantityAvailable = ?, availabilityStatus = ?, lastConfirmedAt = NOW(), updatedAt = NOW()
+         WHERE chemistDrugId = ? AND chemistId = ?`,
+        [quantityAfter, stockStatus, stock.chemistDrugId, item.chemistId]
+      );
+      await recordStockMovement(connection, {
+        chemistDrugId: stock.chemistDrugId,
+        chemistId: item.chemistId,
+        movementType: 'referral_pickup',
+        quantityChange: -pickupQty,
+        quantityBefore,
+        quantityAfter,
+        referenceType: 'external_referral_pickup',
+        referenceId: Number(req.params.referralItemId),
+        referralId: Number(req.params.id),
+        referralItemId: Number(req.params.referralItemId),
+        actorUserId: actorId,
+        notes: chemistNotes || null,
+      });
+      await connection.execute(
+        `INSERT INTO external_chemist_referral_pickups (
+          referralId, referralItemId, chemistId, chemistDrugId, quantityPicked,
+          cumulativeBefore, cumulativeAfter, balanceAfter, pickedBy, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          req.params.id,
+          req.params.referralItemId,
+          item.chemistId,
+          stock.chemistDrugId,
+          pickupQty,
+          quantityAlreadyPicked,
+          cumulativeAfter,
+          balanceAfter,
+          actorId,
+          chemistNotes || null,
+        ]
+      );
+      await connection.execute(
+        `UPDATE prescription_external_referral_items
+         SET status = ?, quantityPicked = ?, quantityBalance = ?, chemistDrugId = ?,
+             chemistNotes = ?, pickedUpAt = COALESCE(pickedUpAt, NOW()),
+             dispensedBy = ?, dispensedAt = NOW(), updatedAt = NOW()
+         WHERE referralItemId = ? AND referralId = ?`,
+        [
+          itemStatus,
+          cumulativeAfter,
+          balanceAfter,
+          stock.chemistDrugId,
+          chemistNotes || null,
+          actorId,
+          req.params.referralItemId,
+          req.params.id,
+        ]
+      );
+    } else {
+      await connection.execute(
+        `UPDATE prescription_external_referral_items
+         SET status = ?, chemistNotes = ?, updatedAt = NOW()
+         WHERE referralItemId = ? AND referralId = ?`,
+        [status, chemistNotes || null, req.params.referralItemId, req.params.id]
+      );
+    }
 
     const [counts] = await connection.execute(
       `SELECT
@@ -1525,7 +1956,7 @@ router.patch('/external-referrals/:id/items/:referralItemId', async (req, res) =
   } catch (error) {
     await connection.rollback();
     console.error('Error updating external referral item:', error);
-    res.status(500).json({ error: 'Failed to update external referral item', message: error.message });
+    res.status(error.status || 500).json({ error: 'Failed to update external referral item', message: error.message });
   } finally {
     connection.release();
   }
@@ -1535,17 +1966,31 @@ router.get('/chemist/users', async (req, res) => {
   try {
     const user = getAuthUser(req);
     if (!user) return res.status(401).json({ error: 'Authentication required' });
-    const scope = await getChemistScopeForUser(user.id || user.userId);
-    if (!scope) return res.status(403).json({ error: 'Chemist user is not assigned to a chemist' });
+    let chemistId = Number(req.query.chemistId) || null;
+    if (isChemistUser(user)) {
+      const scope = await getChemistScopeForUser(user.id || user.userId);
+      if (!scope) return res.status(403).json({ error: 'Chemist user is not assigned to a chemist' });
+      chemistId = Number(scope.chemistId);
+    }
+
+    const params = [];
+    let whereClause = '1=1';
+    if (chemistId) {
+      whereClause = 'ecu.chemistId = ?';
+      params.push(chemistId);
+    }
+
     const [rows] = await pool.execute(
       `SELECT ecu.chemistUserId, ecu.chemistId, ecu.userId, ecu.isPrimary, ecu.isActive, ecu.canManageUsers,
               ecu.createdAt, ecu.updatedAt,
-              u.username, u.email, u.firstName, u.lastName, u.phone, u.department, u.isActive AS userIsActive
+              u.username, u.email, u.firstName, u.lastName, u.phone, u.department, u.isActive AS userIsActive,
+              ec.chemistName, ec.chemistCode
        FROM external_chemist_users ecu
        INNER JOIN users u ON ecu.userId = u.userId
-       WHERE ecu.chemistId = ?
-       ORDER BY ecu.isPrimary DESC, u.firstName ASC, u.username ASC`,
-      [scope.chemistId]
+       INNER JOIN external_chemists ec ON ecu.chemistId = ec.chemistId
+       WHERE ${whereClause}
+       ORDER BY ec.chemistName ASC, ecu.isPrimary DESC, u.firstName ASC, u.username ASC`,
+      params
     );
     res.json(rows);
   } catch (error) {

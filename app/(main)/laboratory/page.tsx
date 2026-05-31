@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Search, Plus, Download, Loader2, MoreVertical, Eye, CheckCircle, XCircle, FlaskConical, Edit, FileText, AlertTriangle, Trash2, Settings, Printer, ArrowRight, MoreHorizontal } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { AddTestRequestForm } from "@/components/add-test-request-form"
+import { ExternalReferrals } from "@/components/external-referrals"
 import { QueueDisplay } from "@/components/queue-display"
 import {
   AlertDialog,
@@ -602,7 +603,7 @@ export default function LaboratoryPage() {
       console.log('[Print] Final orders with details:', ordersWithDetails.map(o => ({
         orderNumber: o.orderNumber,
         itemsCount: o.items.length,
-        itemsWithResults: o.items.filter(i => i.result).length
+        itemsWithResults: o.items.filter((i: any) => i.result).length
       })))
 
       // Generate and print the combined report
@@ -841,6 +842,7 @@ export default function LaboratoryPage() {
         tabs={[
           { value: "tests", label: "Test Requests" },
           { value: "queue", label: "Queue" },
+          { value: "external-referrals", label: "External Referrals" },
           { value: "catalog", label: "Test Catalog" },
         ]}
         pagePath="/laboratory"
@@ -1245,6 +1247,10 @@ export default function LaboratoryPage() {
           <Suspense fallback={<div className="p-4 text-center">Loading queue...</div>}>
             <QueueDisplay initialServicePoint="laboratory" />
           </Suspense>
+        </TabsContent>
+
+        <TabsContent value="external-referrals" className="space-y-4 mt-4">
+          <ExternalReferrals prescriptions={[]} defaultReferralType="lab" allowedReferralTypes={["lab"]} />
         </TabsContent>
 
         <TabsContent value="catalog" className="space-y-4 mt-4">

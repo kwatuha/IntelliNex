@@ -4,11 +4,20 @@ import { useState, useEffect } from "react"
 import { useAuth } from "@/lib/auth/auth-context"
 import { ConfigurableLanding } from "@/components/configurable-landing"
 import { Loader2 } from "lucide-react"
+import { useRouter } from "next/navigation"
 
 export function RoleBasedLanding() {
   const { user, isLoading } = useAuth()
+  const router = useRouter()
   const [landingConfig, setLandingConfig] = useState<any>(null)
   const [loadingConfig, setLoadingConfig] = useState(false)
+
+  useEffect(() => {
+    const roleName = String(user?.role || (user as any)?.roleName || "").toLowerCase()
+    if (!isLoading && roleName === "chemist") {
+      router.replace("/chemist/referrals")
+    }
+  }, [isLoading, router, user])
   
   // Use landing config from user object (set during login)
   // The landingConfig is fetched from the database and included in the JWT token

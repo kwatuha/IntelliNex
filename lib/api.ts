@@ -374,12 +374,67 @@ export const pharmacyApi = {
   updateExternalChemist: (id: string, data: any) =>
     apiRequest<any>(`/api/pharmacy/external-chemists/${id}`, { method: 'PUT', body: data }),
 
-  getExternalReferrals: (filters?: { status?: string; chemistId?: string; patientId?: string; search?: string }) => {
+  getExternalChemistDrugs: (chemistId: string, filters?: { search?: string; status?: string }) => {
+    const params = new URLSearchParams()
+    if (filters?.search) params.append('search', filters.search)
+    if (filters?.status) params.append('status', filters.status)
+    return apiRequest<any[]>(`/api/pharmacy/external-chemists/${chemistId}/drugs?${params.toString()}`)
+  },
+
+  createExternalChemistDrug: (chemistId: string, data: any) =>
+    apiRequest<any>(`/api/pharmacy/external-chemists/${chemistId}/drugs`, { method: 'POST', body: data }),
+
+  updateExternalChemistDrug: (chemistId: string, chemistDrugId: string, data: any) =>
+    apiRequest<any>(`/api/pharmacy/external-chemists/${chemistId}/drugs/${chemistDrugId}`, { method: 'PUT', body: data }),
+
+  deleteExternalChemistDrug: (chemistId: string, chemistDrugId: string) =>
+    apiRequest<any>(`/api/pharmacy/external-chemists/${chemistId}/drugs/${chemistDrugId}`, { method: 'DELETE' }),
+
+  getExternalChemistLabs: (chemistId: string, filters?: { search?: string; status?: string }) => {
+    const params = new URLSearchParams()
+    if (filters?.search) params.append('search', filters.search)
+    if (filters?.status) params.append('status', filters.status)
+    return apiRequest<any[]>(`/api/pharmacy/external-chemists/${chemistId}/labs?${params.toString()}`)
+  },
+
+  createExternalChemistLab: (chemistId: string, data: any) =>
+    apiRequest<any>(`/api/pharmacy/external-chemists/${chemistId}/labs`, { method: 'POST', body: data }),
+
+  updateExternalChemistLab: (chemistId: string, chemistLabId: string, data: any) =>
+    apiRequest<any>(`/api/pharmacy/external-chemists/${chemistId}/labs/${chemistLabId}`, { method: 'PUT', body: data }),
+
+  deleteExternalChemistLab: (chemistId: string, chemistLabId: string) =>
+    apiRequest<any>(`/api/pharmacy/external-chemists/${chemistId}/labs/${chemistLabId}`, { method: 'DELETE' }),
+
+  bulkImportExternalChemistDrugs: (chemistId: string, rows: any[]) =>
+    apiRequest<any>(`/api/pharmacy/external-chemists/${chemistId}/drugs/bulk`, { method: 'POST', body: { rows } }),
+
+  getExternalChemistPriorityDrugs: (chemistId: string, limit = 100) =>
+    apiRequest<any[]>(`/api/pharmacy/external-chemists/${chemistId}/priority-drugs?${new URLSearchParams({ limit: String(limit) })}`),
+
+  getExternalChemistPrescriptionAvailability: (params: { chemistId: string; prescriptionId: string; itemIds?: Array<string | number> }) => {
+    const searchParams = new URLSearchParams()
+    searchParams.append('chemistId', params.chemistId)
+    searchParams.append('prescriptionId', params.prescriptionId)
+    if (params.itemIds?.length) searchParams.append('itemIds', params.itemIds.join(','))
+    return apiRequest<any>(`/api/pharmacy/external-referrals/availability?${searchParams.toString()}`)
+  },
+
+  getExternalChemistLabAvailability: (params: { chemistId: string; labOrderId: string; itemIds?: Array<string | number> }) => {
+    const searchParams = new URLSearchParams()
+    searchParams.append('chemistId', params.chemistId)
+    searchParams.append('labOrderId', params.labOrderId)
+    if (params.itemIds?.length) searchParams.append('itemIds', params.itemIds.join(','))
+    return apiRequest<any>(`/api/pharmacy/external-referrals/lab-availability?${searchParams.toString()}`)
+  },
+
+  getExternalReferrals: (filters?: { status?: string; chemistId?: string; patientId?: string; search?: string; referralType?: string }) => {
     const params = new URLSearchParams()
     if (filters?.status) params.append('status', filters.status)
     if (filters?.chemistId) params.append('chemistId', filters.chemistId)
     if (filters?.patientId) params.append('patientId', filters.patientId)
     if (filters?.search) params.append('search', filters.search)
+    if (filters?.referralType) params.append('referralType', filters.referralType)
     return apiRequest<any[]>(`/api/pharmacy/external-referrals?${params.toString()}`)
   },
 
@@ -394,6 +449,21 @@ export const pharmacyApi = {
 
   getCurrentChemist: () =>
     apiRequest<any>('/api/pharmacy/chemist/me'),
+
+  getChemistStockAlerts: (status: string = 'open') =>
+    apiRequest<any[]>(`/api/pharmacy/chemist/alerts?${new URLSearchParams({ status })}`),
+
+  updateChemistStockAlert: (alertId: string, data: any) =>
+    apiRequest<any>(`/api/pharmacy/chemist/alerts/${alertId}`, { method: 'PATCH', body: data }),
+
+  getChemistUsers: () =>
+    apiRequest<any[]>('/api/pharmacy/chemist/users'),
+
+  createChemistUser: (data: any) =>
+    apiRequest<any>('/api/pharmacy/chemist/users', { method: 'POST', body: data }),
+
+  updateChemistUser: (chemistUserId: string, data: any) =>
+    apiRequest<any>(`/api/pharmacy/chemist/users/${chemistUserId}`, { method: 'PATCH', body: data }),
 
   // Batch Traceability
   getBatchTrace: (batchNumber: string) =>

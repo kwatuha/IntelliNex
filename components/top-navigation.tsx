@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/auth/auth-context"
 import { useRoleMenuAccess } from "@/lib/hooks/use-role-menu-access"
-import { filterNavigationCategories } from "@/lib/role-menu-filter"
+import { filterNavigationCategories, filterSidebarItems } from "@/lib/role-menu-filter"
 import * as LucideIcons from "lucide-react"
 import { ArrowRight } from "lucide-react"
 
@@ -28,7 +28,13 @@ export function TopNavigation({ onCategoryChange, activeCategory }: TopNavigatio
     // Navigate to the first item in the category
     const category = navigationCategories.find(cat => cat.id === categoryId)
     if (category && category.items.length > 0) {
-      router.push(category.items[0].href)
+      const allowedItems = menuLoading || !menuAccess
+        ? category.items
+        : filterSidebarItems(category.items, category.id, menuAccess)
+      const firstAllowedItem = allowedItems[0]
+      if (firstAllowedItem) {
+        router.push(firstAllowedItem.href)
+      }
     }
   }
 

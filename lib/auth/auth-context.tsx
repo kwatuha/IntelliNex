@@ -2,13 +2,16 @@
 
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
 import type { UserRole } from "./permissions"
-import { AuthService, type User } from "./auth-service"
+import { AuthService, type Branch, type User } from "./auth-service"
 
 interface AuthContextType {
   user: User | null
   userRole: UserRole
   isAuthenticated: boolean
   isLoading: boolean
+  currentBranch: Branch | null
+  accessibleBranches: Branch[]
+  setCurrentBranch: (branchId: number | string) => void
   login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>
   logout: () => void
 }
@@ -19,8 +22,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isLoading, setIsLoading] = useState(true) // Start with true to check auth on mount
+  const [accessibleBranches, setAccessibleBranches] = useState<Branch[]>([])
+  const [currentBranch, setCurrentBranchState] = useState<Branch | null>(null)
 
   const userRole = user?.role || "registration"
+
+  const normalizeBranch = (branch: any): Branch | null => {
+    if (!branch?.branchId || !branch?.branchName) return null
+    return {
+      branchId: Number(branch.branchId),
+      branchCode: branch.branchCode,
+      branchName: branch.branchName,
+      isMainBranch: Boolean(branch.isMainBranch),
+      isDefault: Boolean(branch.isDefault),
+    }
+  }
+
+  const applyBranchContext = (rawUser: any) => {
+    const branches = Array.isArray(rawUser?.branches)
+      ? rawUser.branches.map(normalizeBranch).filter(Boolean) as Branch[]
+      : []
+    const defaultBranch = normalizeBranch(rawUser?.defaultBranch || rawUser?.currentBranch) || branches[0] || null
+    const storedBranchId = typeof window !== 'undefined' ? localStorage.getItem('current_branch_id') : null
+    const selectedBranch =
+      branches.find((branch) => String(branch.branchId) === storedBranchId) ||
+      defaultBranch ||
+      null
+
+    setAccessibleBranches(branches)
+    setCurrentBranchState(selectedBranch)
+    if (selectedBranch && typeof window !== 'undefined') {
+      localStorage.setItem('current_branch_id', String(selectedBranch.branchId))
+    }
+
+    return { branches, defaultBranch, currentBranch: selectedBranch }
+  }
+
+  const setCurrentBranch = (branchId: number | string) => {
+    const branch = accessibleBranches.find((item) => String(item.branchId) === String(branchId))
+    if (!branch) return
+    setCurrentBranchState(branch)
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('current_branch_id', String(branch.branchId))
+    }
+  }
 
   // Check for existing authentication on mount
   useEffect(() => {
@@ -46,6 +91,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearTimeout(safetyTimeout)
         setIsLoading(false)
         setIsAuthenticated(false)
+        setAccessibleBranches([])
+        setCurrentBranchState(null)
         return
       }
 
@@ -83,6 +130,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (response && response.ok) {
           const data = await response.json()
           if (data.user) {
+            const branchContext = applyBranchContext(data.user)
             // Normalize privileges - handle both array of strings and array of objects
             let privileges: Array<{ privilegeName: string; module?: string }> = []
             if (data.user.privileges) {
@@ -106,6 +154,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               privileges: privileges,
               dashboardCards: data.user.dashboardCards || null,
               landingConfig: data.user.landingConfig || null,
+              branches: branchContext.branches,
+              defaultBranch: branchContext.defaultBranch,
+              currentBranch: branchContext.currentBranch,
+              canAccessAllBranches: Boolean(data.user.canAccessAllBranches),
             })
             setIsAuthenticated(true)
             setIsLoading(false)
@@ -136,6 +188,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (parts.length === 3) {
             const payload = JSON.parse(atob(parts[1]))
             if (payload.user && payload.exp && payload.exp * 1000 > Date.now()) {
+              const branchContext = applyBranchContext(payload.user)
               // Token not expired, use stored user data
               // Normalize privileges from JWT payload
               let privileges: Array<{ privilegeName: string; module?: string }> = []
@@ -163,6 +216,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 privileges: privileges,
                 dashboardCards: payload.user.dashboardCards || null,
                 landingConfig: payload.user.landingConfig || null,
+                branches: branchContext.branches,
+                defaultBranch: branchContext.defaultBranch,
+                currentBranch: branchContext.currentBranch,
+                canAccessAllBranches: Boolean(payload.user.canAccessAllBranches),
               })
               setIsAuthenticated(true)
               setIsLoading(false)
@@ -179,6 +236,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.removeItem('jwt_token')
         localStorage.removeItem('auth_token')
         setIsAuthenticated(false)
+        setAccessibleBranches([])
+        setCurrentBranchState(null)
       } finally {
         // Always ensure loading is set to false
         clearTimeout(safetyTimeout)
@@ -220,6 +279,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             localStorage.setItem('jwt_token', data.token)
             // Also store user data
             if (data.user) {
+            const branchContext = applyBranchContext(data.user)
             // Normalize privileges - handle both array of strings and array of objects
             let privileges: Array<{ privilegeName: string; module?: string }> = []
             if (data.user.privileges) {
@@ -243,6 +303,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               privileges: privileges,
               dashboardCards: data.user.dashboardCards || null,
               landingConfig: data.user.landingConfig || null,
+              branches: branchContext.branches,
+              defaultBranch: branchContext.defaultBranch,
+              currentBranch: branchContext.currentBranch,
+              canAccessAllBranches: Boolean(data.user.canAccessAllBranches),
             })
               setIsAuthenticated(true)
               return { success: true }
@@ -293,7 +357,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('auth_token')
     localStorage.removeItem('token')
     localStorage.removeItem('jwt_token')
+    localStorage.removeItem('current_branch_id')
     setUser(null)
+    setAccessibleBranches([])
+    setCurrentBranchState(null)
     setIsAuthenticated(false)
   }
 
@@ -303,6 +370,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       userRole,
       isAuthenticated,
       isLoading,
+      currentBranch,
+      accessibleBranches,
+      setCurrentBranch,
       login,
       logout
     }}>

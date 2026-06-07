@@ -815,7 +815,7 @@ router.get('/inventory', async (req, res) => {
  */
 router.get('/drug-inventory', async (req, res) => {
     try {
-        const { medicationId, search, page = 1, limit = 50 } = req.query;
+        const { medicationId, search, location, page = 1, limit = 50 } = req.query;
         const offset = (page - 1) * limit;
 
         let query = `
@@ -837,9 +837,14 @@ router.get('/drug-inventory', async (req, res) => {
         }
 
         if (search) {
-            query += ` AND (m.name LIKE ? OR m.genericName LIKE ? OR di.batchNumber LIKE ?)`;
+            query += ` AND (m.name LIKE ? OR m.genericName LIKE ? OR di.batchNumber LIKE ? OR di.location LIKE ?)`;
             const searchTerm = `%${search}%`;
-            params.push(searchTerm, searchTerm, searchTerm);
+            params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+        }
+
+        if (location) {
+            query += ` AND di.location = ?`;
+            params.push(location);
         }
 
         query += ` ORDER BY di.expiryDate ASC, m.name LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}`;
@@ -956,9 +961,9 @@ router.post('/drug-inventory', async (req, res) => {
         } = req.body;
 
         // 1. Validation
-        if (!medicationId || !batchNumber || !expiryDate || !sellPrice) {
+        if (!medicationId || !batchNumber || !expiryDate || !sellPrice || !String(location || '').trim()) {
             await connection.rollback();
-            return res.status(400).json({ message: 'Missing required fields: medicationId, batchNumber, expiryDate, sellPrice' });
+            return res.status(400).json({ message: 'Missing required fields: medicationId, batchNumber, expiryDate, sellPrice, location' });
         }
 
         const userId = req.user?.id || req.user?.userId || 1;
@@ -1121,6 +1126,10 @@ router.put('/drug-inventory/:id', async (req, res) => {
 
         if (existing.length === 0) {
             return res.status(404).json({ message: 'Drug inventory item not found' });
+        }
+
+        if (location !== undefined && !String(location || '').trim()) {
+            return res.status(400).json({ message: 'Location is required' });
         }
 
         // Build update query

@@ -31,7 +31,19 @@ type ChemistReferral = {
   doctorFirstName?: string
   doctorLastName?: string
   patientInstructions?: string
+  originBranchName?: string
+  originBranchCode?: string
+  originStoreName?: string
+  originStoreLocation?: string
+  originLocationLabel?: string
   items?: any[]
+}
+
+type ItemDraft = {
+  status?: string
+  quantityPicked?: string
+  chemistNotes?: string
+  externalResultSummary?: string
 }
 
 export function ChemistReferrals() {
@@ -49,7 +61,7 @@ export function ChemistReferrals() {
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState("active")
-  const [itemDrafts, setItemDrafts] = useState<Record<string, { status: string; quantityPicked: string; chemistNotes: string; externalResultSummary: string }>>({})
+  const [itemDrafts, setItemDrafts] = useState<Record<string, ItemDraft>>({})
   const [resultDialog, setResultDialog] = useState<{ referral: ChemistReferral; item: any } | null>(null)
   const [resultCopied, setResultCopied] = useState(false)
   const isCurrentUserChemist = useMemo(() => {
@@ -215,6 +227,14 @@ export function ChemistReferrals() {
   const referralSourceNumber = (referral: ChemistReferral) =>
     referral.referralType === "lab" ? referral.labOrderNumber || "-" : referral.prescriptionNumber || "-"
 
+  const originLabel = (referral: ChemistReferral) =>
+    referral.originLocationLabel ||
+    [
+      referral.originBranchName,
+      referral.originStoreName || referral.originStoreLocation,
+    ].filter(Boolean).join(" - ") ||
+    "-"
+
   const isCompletedStatus = (status: string) =>
     ["picked_up", "completed", "not_picked", "cancelled"].includes(status)
 
@@ -245,6 +265,7 @@ export function ChemistReferrals() {
         referralSourceNumber(referral),
         referral.patientNumber,
         referral.patientPhone,
+        originLabel(referral),
         patientName(referral),
         ...(referral.items || []).map((item) => itemLabel(item)),
       ]
@@ -381,7 +402,7 @@ export function ChemistReferrals() {
   const canManageReferrals = referralMode === "chemist" && Boolean(chemist?.chemistId)
   const selectedChemist = chemist || chemists.find((item) => String(item.chemistId) === selectedChemistId)
   const resultDialogKey = resultDialog ? String(resultDialog.item.referralItemId) : ""
-  const resultDraft = resultDialogKey ? itemDrafts[resultDialogKey] || {} : {}
+  const resultDraft: ItemDraft = resultDialogKey ? itemDrafts[resultDialogKey] || {} : {}
   const resultSummaryValue = resultDialog ? String(resultDraft.externalResultSummary ?? resultDialog.item.externalResultSummary ?? "") : ""
   const resultNotesValue = resultDialog ? String(resultDraft.chemistNotes ?? resultDialog.item.chemistNotes ?? "") : ""
   const resultHasSummary = Boolean(resultSummaryValue.trim())
@@ -631,6 +652,7 @@ export function ChemistReferrals() {
                     </CardDescription>
                     <div className="mt-1 text-sm text-muted-foreground">
                       Patient phone: {referral.patientPhone || "-"} | {referral.referralType === "lab" ? "Lab order" : "Prescription"}: {referralSourceNumber(referral)}
+                      {" | "}Referred from: {originLabel(referral)}
                       {referral.pickupDeadline ? ` | Deadline: ${new Date(referral.pickupDeadline).toLocaleDateString()}` : ""}
                     </div>
                   </div>

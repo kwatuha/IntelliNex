@@ -132,8 +132,8 @@ export function DrugInventoryForm({ item, open, onOpenChange, onSuccess, medicat
       return
     }
 
-    if (!formData.batchNumber || !formData.expiryDate || !formData.sellPrice) {
-      setError('Batch number, expiry date, and sell price are required')
+    if (!formData.batchNumber || !formData.expiryDate || !formData.sellPrice || !formData.location?.trim()) {
+      setError('Batch number, expiry date, sell price, and location are required')
       setLoading(false)
       return
     }
@@ -298,7 +298,7 @@ export function DrugInventoryForm({ item, open, onOpenChange, onSuccess, medicat
           </div>
 
           <div>
-            <Label htmlFor="location">Location</Label>
+            <Label htmlFor="location">Location *</Label>
             {loadingStores ? (
               <div className="flex items-center justify-center h-10 border rounded-md">
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -309,7 +309,7 @@ export function DrugInventoryForm({ item, open, onOpenChange, onSuccess, medicat
                 onValueChange={(value) => setFormData({ ...formData, location: value })}
               >
                 <SelectTrigger id="location">
-                  <SelectValue placeholder="Select a store location (optional)" />
+                  <SelectValue placeholder="Select a store location" />
                 </SelectTrigger>
                 <SelectContent>
                   {stores.map((store) => (
@@ -327,6 +327,7 @@ export function DrugInventoryForm({ item, open, onOpenChange, onSuccess, medicat
                 value={formData.location}
                 onChange={(e) => setFormData({ ...formData, location: e.target.value })}
                 placeholder="Storage location (no stores configured)"
+                required
               />
             )}
           </div>

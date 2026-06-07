@@ -20,9 +20,13 @@ router.get('/', async (req, res) => {
         const params = [];
 
         if (search) {
-            query += ` AND (firstName LIKE ? OR lastName LIKE ? OR patientNumber LIKE ? OR phone LIKE ? OR email LIKE ? OR CONCAT(firstName, ' ', lastName) LIKE ?)`;
+            query += ` AND (
+                firstName LIKE ? OR lastName LIKE ? OR patientNumber LIKE ? OR phone LIKE ? OR REPLACE(REPLACE(phone, ' ', ''), '-', '') LIKE ?
+                OR email LIKE ? OR idNumber LIKE ? OR CONCAT(firstName, ' ', lastName) LIKE ?
+            )`;
             const searchTerm = `%${search}%`;
-            params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+            const compactSearchTerm = `%${String(search).replace(/[\s-]/g, '')}%`;
+            params.push(searchTerm, searchTerm, searchTerm, searchTerm, compactSearchTerm, searchTerm, searchTerm, searchTerm);
         }
 
         query += ` ORDER BY createdAt DESC LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}`;

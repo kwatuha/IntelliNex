@@ -1,6 +1,14 @@
 // import usersData from '../data/users.json'
 import type { UserRole } from './permissions'
 
+export interface Branch {
+  branchId: number
+  branchCode?: string
+  branchName: string
+  isMainBranch?: boolean
+  isDefault?: boolean
+}
+
 export interface User {
   id: string
   username: string
@@ -10,6 +18,10 @@ export interface User {
   department: string
   privileges?: Array<{ privilegeName: string; module?: string }> | string[]
   dashboardCards?: Record<string, boolean> | null
+  branches?: Branch[]
+  defaultBranch?: Branch | null
+  currentBranch?: Branch | null
+  canAccessAllBranches?: boolean
   landingConfig?: {
     type: 'dashboard' | 'app_view' | 'redirect';
     label?: string;

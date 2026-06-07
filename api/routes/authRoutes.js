@@ -4,6 +4,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
+const { getUserBranchContext } = require('../lib/branchContext');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_fallback_secret_for_dev_only_change_this_asap';
 
@@ -69,6 +70,7 @@ router.post('/login', async (req, res) => {
 
         // Get user privileges
         const privileges = await getPrivilegesByRole(user.roleId);
+        const branchContext = await getUserBranchContext(pool, user.userId);
 
         // Get role dashboard card visibility configuration
         let dashboardCards = null;
@@ -161,7 +163,11 @@ router.post('/login', async (req, res) => {
                 department: user.department,
                 privileges: privileges,
                 landingConfig: landingConfig,
-                dashboardCards: dashboardCards
+                dashboardCards: dashboardCards,
+                branches: branchContext.branches,
+                defaultBranch: branchContext.defaultBranch,
+                currentBranch: branchContext.currentBranch,
+                canAccessAllBranches: branchContext.canAccessAllBranches
             }
         };
 
@@ -187,7 +193,11 @@ router.post('/login', async (req, res) => {
                         department: user.department,
                         privileges: privileges,
                         landingConfig: landingConfig,
-                        dashboardCards: dashboardCards
+                        dashboardCards: dashboardCards,
+                        branches: branchContext.branches,
+                        defaultBranch: branchContext.defaultBranch,
+                        currentBranch: branchContext.currentBranch,
+                        canAccessAllBranches: branchContext.canAccessAllBranches
                     }
                 });
             }
@@ -314,6 +324,7 @@ router.get('/verify', async (req, res) => {
 
         const user = users[0];
         const privileges = await getPrivilegesByRole(user.roleId);
+        const branchContext = await getUserBranchContext(pool, user.userId);
 
         // Get role dashboard card visibility configuration
         let dashboardCards = null;
@@ -399,7 +410,11 @@ router.get('/verify', async (req, res) => {
                 department: user.department,
                 privileges: privileges,
                 landingConfig: landingConfig,
-                dashboardCards: dashboardCards
+                dashboardCards: dashboardCards,
+                branches: branchContext.branches,
+                defaultBranch: branchContext.defaultBranch,
+                currentBranch: branchContext.currentBranch,
+                canAccessAllBranches: branchContext.canAccessAllBranches
             }
         });
     } catch (err) {

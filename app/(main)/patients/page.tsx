@@ -219,7 +219,7 @@ export default function PatientsPage() {
         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
         <Input
           type="search"
-          placeholder="Search by name, patient number, phone, or email..."
+          placeholder="Search by name, patient number, phone, ID number, or email..."
           className="w-full pl-8"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -245,6 +245,7 @@ export default function PatientsPage() {
                   {patient.dateOfBirth && <p>Age: {calculateAge(patient.dateOfBirth) || 'N/A'}</p>}
                   {patient.gender && <p>Gender: {patient.gender}</p>}
                   {patient.phone && <p>Phone: {patient.phone}</p>}
+                  {patient.idNumber && <p>ID No: {patient.idNumber}</p>}
                   {patient.createdAt && <p>Registered: {formatDate(patient.createdAt)}</p>}
                 </div>
                 <div className="flex gap-2 pt-2">

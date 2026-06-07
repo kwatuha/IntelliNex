@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useMemo } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,6 +21,7 @@ import { DispenseMedicationDialog } from "@/components/dispense-medication-dialo
 import { NursePickup } from "@/components/nurse-pickup"
 import { ExternalReferrals } from "@/components/external-referrals"
 import { pharmacyApi } from "@/lib/api"
+import { SearchableSelect } from "@/components/ui/searchable-select"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -140,8 +141,10 @@ export default function PharmacyPage() {
 
   // Drug Inventory state
   const [drugInventory, setDrugInventory] = useState<DrugInventoryItem[]>([])
+  const [drugStores, setDrugStores] = useState<any[]>([])
   const [loadingDrugInventory, setLoadingDrugInventory] = useState(true)
   const [drugInventorySearch, setDrugInventorySearch] = useState("")
+  const [drugInventoryLocationFilter, setDrugInventoryLocationFilter] = useState("all")
   const [isAddDrugInventoryOpen, setIsAddDrugInventoryOpen] = useState(false)
   const [isEditDrugInventoryOpen, setIsEditDrugInventoryOpen] = useState(false)
   const [selectedDrugInventoryItem, setSelectedDrugInventoryItem] = useState<DrugInventoryItem | null>(null)
@@ -158,6 +161,14 @@ export default function PharmacyPage() {
   const [drugInventorySummary, setDrugInventorySummary] = useState<any[]>([])
   const [loadingDrugInventorySummary, setLoadingDrugInventorySummary] = useState(true)
   const [drugInventorySummarySearch, setDrugInventorySummarySearch] = useState("")
+
+  const drugInventoryLocationOptions = useMemo(() => [
+    { value: "all", label: "All locations" },
+    ...drugStores.map((store) => ({
+      value: store.storeName,
+      label: [store.storeName, store.branchName, store.isDispensingStore ? "Dispensing" : ""].filter(Boolean).join(" - "),
+    })),
+  ], [drugStores])
 
   const loadPrescriptions = async () => {
     try {
@@ -199,7 +210,13 @@ export default function PharmacyPage() {
     try {
       setLoadingDrugInventory(true)
       setError(null)
-      const data = await pharmacyApi.getDrugInventory(undefined, drugInventorySearch || undefined)
+      const data = await pharmacyApi.getDrugInventory(
+        undefined,
+        drugInventorySearch || undefined,
+        1,
+        50,
+        drugInventoryLocationFilter === "all" ? undefined : drugInventoryLocationFilter
+      )
       setDrugInventory(data)
     } catch (err: any) {
       setError(err.message || 'Failed to load drug inventory')
@@ -211,7 +228,20 @@ export default function PharmacyPage() {
 
   useEffect(() => {
     loadDrugInventory()
-  }, [drugInventorySearch])
+  }, [drugInventorySearch, drugInventoryLocationFilter])
+
+  useEffect(() => {
+    const loadDrugStores = async () => {
+      try {
+        const stores = await pharmacyApi.getDrugStores(undefined, undefined, 'true')
+        setDrugStores(stores)
+      } catch (err) {
+        console.error('Error loading drug stores:', err)
+        setDrugStores([])
+      }
+    }
+    loadDrugStores()
+  }, [])
 
   const loadDrugInventorySummary = async () => {
     try {
@@ -1795,7 +1825,7 @@ export default function PharmacyPage() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex flex-col gap-3 mb-4 md:flex-row md:items-center md:justify-between">
                 <div className="relative w-64">
                   <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input
@@ -1900,6 +1930,15 @@ export default function PharmacyPage() {
                     className="w-full pl-8"
                     value={drugInventorySearch}
                     onChange={(e) => setDrugInventorySearch(e.target.value)}
+                  />
+                </div>
+                <div className="w-full md:w-72">
+                  <SearchableSelect
+                    value={drugInventoryLocationFilter}
+                    onValueChange={setDrugInventoryLocationFilter}
+                    options={drugInventoryLocationOptions}
+                    placeholder="Filter by location..."
+                    emptyMessage="No location found."
                   />
                 </div>
               </div>

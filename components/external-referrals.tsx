@@ -57,6 +57,11 @@ type ExternalReferral = {
   completedAt?: string
   patientInstructions?: string
   notes?: string
+  originBranchName?: string
+  originBranchCode?: string
+  originStoreName?: string
+  originStoreLocation?: string
+  originLocationLabel?: string
   items?: any[]
 }
 
@@ -364,6 +369,14 @@ export function ExternalReferrals({
       .join("; ")
   }
 
+  const originLabel = (referral: ExternalReferral) =>
+    referral.originLocationLabel ||
+    [
+      referral.originBranchName,
+      referral.originStoreName || referral.originStoreLocation,
+    ].filter(Boolean).join(" - ") ||
+    "-"
+
   const referralExportRows = () =>
     referrals.map((referral, index) => ({
       "#": index + 1,
@@ -377,6 +390,9 @@ export function ExternalReferrals({
       "Chemist": referral.chemistName,
       "Chemist Code": referral.chemistCode || "-",
       "Chemist Phone": referral.chemistPhone || "-",
+      "Referred From": originLabel(referral),
+      "Origin Branch": referral.originBranchName || "-",
+      "Origin Store/Location": referral.originStoreName || referral.originStoreLocation || "-",
       "Pickup Code": referral.pickupCode || "-",
       "Pickup Deadline": formatDate(referral.pickupDeadline),
       "Status": formatStatus(referral.status),
@@ -394,6 +410,7 @@ export function ExternalReferrals({
         "Patient": patientName(referral),
         "Patient No.": referral.patientNumber || "-",
         "Chemist": referral.chemistName,
+        "Referred From": originLabel(referral),
         "Type": referral.referralType === "lab" ? "Lab" : "Drug",
         "Item": itemLabel(item),
         "Dosage": item.dosage || "-",
@@ -505,6 +522,7 @@ export function ExternalReferrals({
         patientName(referral),
         referral.patientNumber || "-",
         referral.chemistName,
+        originLabel(referral),
         referral.pickupCode || "-",
         formatStatus(referral.status),
         String(referral.items?.length || 0),
@@ -512,7 +530,7 @@ export function ExternalReferrals({
       ])
 
       autoTable(pdf, {
-        head: [["Referral", "Patient", "Patient No.", "Chemist", "Code", "Status", "Items", "Details"]],
+        head: [["Referral", "Patient", "Patient No.", "Chemist", "Referred From", "Code", "Status", "Items", "Details"]],
         body: referralRows,
         startY: 32,
         margin: { left: 104, right: 10 },
@@ -656,6 +674,7 @@ export function ExternalReferrals({
                     <TableCell>
                       <div className="font-medium">{referral.referralNumber}</div>
                       <div className="text-xs text-muted-foreground">{sourceNumber(referral)} - code {referral.pickupCode || "-"}</div>
+                      <div className="text-xs text-muted-foreground">From: {originLabel(referral)}</div>
                     </TableCell>
                     <TableCell>
                       <div>{patientName(referral)}</div>

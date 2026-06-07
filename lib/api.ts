@@ -47,6 +47,9 @@ async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promis
             localStorage.getItem('jwt_token') ||
             localStorage.getItem('auth_token');
   }
+  const currentBranchId = typeof window !== 'undefined'
+    ? localStorage.getItem('current_branch_id')
+    : null;
 
   const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -60,6 +63,7 @@ async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promis
     headers: {
       'Content-Type': 'application/json',
       ...(token && { 'Authorization': `Bearer ${token}` }),
+      ...(currentBranchId && { 'X-Branch-Id': currentBranchId }),
       ...headers,
     },
   };
@@ -281,8 +285,8 @@ export const pharmacyApi = {
     apiRequest<any[]>('/api/pharmacy/inventory'),
 
   // Drug Inventory
-  getDrugInventory: (medicationId?: string, search?: string, page = 1, limit = 50) =>
-    apiRequest<any[]>(`/api/pharmacy/drug-inventory?${new URLSearchParams({ page: page.toString(), limit: limit.toString(), ...(medicationId && { medicationId }), ...(search && { search }) })}`),
+  getDrugInventory: (medicationId?: string, search?: string, page = 1, limit = 50, location?: string) =>
+    apiRequest<any[]>(`/api/pharmacy/drug-inventory?${new URLSearchParams({ page: page.toString(), limit: limit.toString(), ...(medicationId && { medicationId }), ...(search && { search }), ...(location && { location }) })}`),
 
   getDrugInventorySummary: (search?: string, page = 1, limit = 100) =>
     apiRequest<{ data: any[], pagination: any }>(`/api/pharmacy/drug-inventory/summary?${new URLSearchParams({ page: page.toString(), limit: limit.toString(), ...(search && { search }) })}`),

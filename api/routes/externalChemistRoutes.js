@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
+const { resolveReferralOrigin } = require('../lib/branchContext');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your_fallback_secret_for_dev_only_change_this_asap';
@@ -681,6 +682,8 @@ function buildReferralSelect(whereClause = '1=1') {
     SELECT r.*,
            ec.chemistName, ec.chemistCode, ec.phone AS chemistPhone, ec.email AS chemistEmail,
            ec.address AS chemistAddress, ec.latitude, ec.longitude,
+           ob.branchName AS originBranchName, ob.branchCode AS originBranchCode,
+           os.storeName AS originStoreName, os.location AS originStoreLocation,
            p.prescriptionNumber, p.prescriptionDate,
            lo.orderNumber AS labOrderNumber, lo.orderDate AS labOrderDate, lo.priority AS labPriority,
            pt.patientNumber, pt.firstName AS patientFirstName, pt.lastName AS patientLastName, pt.phone AS patientPhone,
@@ -688,6 +691,8 @@ function buildReferralSelect(whereClause = '1=1') {
            rb.firstName AS referredByFirstName, rb.lastName AS referredByLastName, rb.username AS referredByUsername
     FROM prescription_external_referrals r
     INNER JOIN external_chemists ec ON r.chemistId = ec.chemistId
+    LEFT JOIN branches ob ON r.branchId = ob.branchId
+    LEFT JOIN drug_stores os ON r.originStoreId = os.storeId
     LEFT JOIN prescriptions p ON r.prescriptionId = p.prescriptionId
     LEFT JOIN lab_test_orders lo ON r.labOrderId = lo.orderId
     INNER JOIN patients pt ON r.patientId = pt.patientId
@@ -1255,15 +1260,22 @@ router.get('/external-referrals', async (req, res) => {
     const params = [];
     const conditions = [];
     const { status, chemistId, patientId, search, referralType } = req.query;
+    const branchId = req.query.branchId || req.headers['x-branch-id'];
 
     if (user && isChemistUser(user)) {
       const scope = await getChemistScopeForUser(user.id || user.userId);
       if (!scope) return res.status(403).json({ error: 'Chemist user is not assigned to a chemist' });
       conditions.push('r.chemistId = ?');
       params.push(scope.chemistId);
-    } else if (chemistId) {
-      conditions.push('r.chemistId = ?');
-      params.push(chemistId);
+    } else {
+      if (chemistId) {
+        conditions.push('r.chemistId = ?');
+        params.push(chemistId);
+      }
+      if (branchId && String(branchId) !== 'all') {
+        conditions.push('r.branchId = ?');
+        params.push(branchId);
+      }
     }
 
     if (status) {
@@ -1282,9 +1294,10 @@ router.get('/external-referrals', async (req, res) => {
       conditions.push(`(
         r.referralNumber LIKE ? OR r.pickupCode LIKE ? OR pt.firstName LIKE ? OR pt.lastName LIKE ? OR pt.patientNumber LIKE ?
         OR ec.chemistName LIKE ? OR p.prescriptionNumber LIKE ? OR lo.orderNumber LIKE ?
+        OR ob.branchName LIKE ? OR os.storeName LIKE ? OR r.originLocationLabel LIKE ?
       )`);
       const term = `%${search}%`;
-      params.push(term, term, term, term, term, term, term, term);
+      params.push(term, term, term, term, term, term, term, term, term, term, term);
     }
 
     const where = conditions.length ? conditions.join(' AND ') : '1=1';
@@ -1494,14 +1507,19 @@ router.post('/external-referrals', async (req, res) => {
       const referralNumber = await nextReferralNumber(connection);
       const pickupCode = data.pickupCode || crypto.randomBytes(3).toString('hex').toUpperCase();
       const referredBy = user?.id || user?.userId || data.referredBy || null;
+      const origin = await resolveReferralOrigin(connection, req, { ...data, referredBy }, labOrders[0]);
 
       const [result] = await connection.execute(
         `INSERT INTO prescription_external_referrals (
-          referralNumber, referralType, prescriptionId, labOrderId, patientId, chemistId, referredBy, pickupDeadline, pickupCode,
+          referralNumber, referralType, branchId, originStoreId, originLocationLabel,
+          prescriptionId, labOrderId, patientId, chemistId, referredBy, pickupDeadline, pickupCode,
           patientInstructions, notes
-        ) VALUES (?, 'lab', NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, 'lab', ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           referralNumber,
+          origin.branchId,
+          origin.originStoreId,
+          origin.originLocationLabel,
           labOrderId,
           labOrders[0].patientId,
           chemistId,
@@ -1611,14 +1629,19 @@ router.post('/external-referrals', async (req, res) => {
     const referralNumber = await nextReferralNumber(connection);
     const pickupCode = data.pickupCode || crypto.randomBytes(3).toString('hex').toUpperCase();
     const referredBy = user?.id || user?.userId || data.referredBy || null;
+    const origin = await resolveReferralOrigin(connection, req, { ...data, referredBy }, prescriptions[0]);
 
     const [result] = await connection.execute(
       `INSERT INTO prescription_external_referrals (
-        referralNumber, referralType, prescriptionId, labOrderId, patientId, chemistId, referredBy, pickupDeadline, pickupCode,
+        referralNumber, referralType, branchId, originStoreId, originLocationLabel,
+        prescriptionId, labOrderId, patientId, chemistId, referredBy, pickupDeadline, pickupCode,
         patientInstructions, notes
-      ) VALUES (?, 'drug', ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, 'drug', ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)`,
       [
         referralNumber,
+        origin.branchId,
+        origin.originStoreId,
+        origin.originLocationLabel,
         prescriptionId,
         prescriptions[0].patientId,
         chemistId,

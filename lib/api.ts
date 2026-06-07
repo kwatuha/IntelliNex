@@ -291,6 +291,15 @@ export const pharmacyApi = {
   getDrugInventorySummary: (search?: string, page = 1, limit = 100) =>
     apiRequest<{ data: any[], pagination: any }>(`/api/pharmacy/drug-inventory/summary?${new URLSearchParams({ page: page.toString(), limit: limit.toString(), ...(search && { search }) })}`),
 
+  getInventoryValueByLocation: (filters?: { location?: string; search?: string; dateFrom?: string; dateTo?: string }) => {
+    const params = new URLSearchParams()
+    if (filters?.location && filters.location !== 'all') params.append('location', filters.location)
+    if (filters?.search) params.append('search', filters.search)
+    if (filters?.dateFrom) params.append('dateFrom', filters.dateFrom)
+    if (filters?.dateTo) params.append('dateTo', filters.dateTo)
+    return apiRequest<{ data: any[]; totals: { quantity: number; amountValue: number } }>(`/api/pharmacy/drug-inventory/value-by-location?${params.toString()}`)
+  },
+
   getDrugInventoryItem: (id: string) =>
     apiRequest<any>(`/api/pharmacy/drug-inventory/${id}`),
 
@@ -1550,6 +1559,16 @@ export const analyticsApi = {
 
   getInventoryValue: () =>
     apiRequest<any>(`/api/analytics/inventory-value`),
+
+  getInventoryValueByLocation: (filters?: { location?: string; search?: string; dateFrom?: string; dateTo?: string }) => {
+    const queryParams = new URLSearchParams()
+    if (filters?.location && filters.location !== 'all') queryParams.append('location', filters.location)
+    if (filters?.search) queryParams.append('search', filters.search)
+    if (filters?.dateFrom) queryParams.append('dateFrom', filters.dateFrom)
+    if (filters?.dateTo) queryParams.append('dateTo', filters.dateTo)
+    const query = queryParams.toString()
+    return apiRequest<{ data: any[]; totals: { quantity: number; amountValue: number } }>(`/api/pharmacy/drug-inventory/value-by-location${query ? `?${query}` : ''}`)
+  },
 
   getPaymentMethods: (params?: { months?: number; startDate?: string; endDate?: string }) => {
     const queryParams = new URLSearchParams()

@@ -1,10 +1,11 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Input } from "@/components/ui/input"
 import {
   Bar,
   BarChart,
@@ -22,7 +23,7 @@ import {
 } from "recharts"
 import { useTheme } from "next-themes"
 import { analyticsApi } from "@/lib/api"
-import { Loader2, TrendingUp, DollarSign, Users, Calendar, Store, Package } from "lucide-react"
+import { Loader2, TrendingUp, DollarSign, Users, Calendar, Store, Package, Search } from "lucide-react"
 
 const COLORS = ["#0088FE", "#00C49F", "#FFBB28", "#FF8042", "#8884d8", "#82ca9d", "#FF6B6B", "#6B66FF"]
 
@@ -41,10 +42,21 @@ export default function AnalyticsPage() {
   const [paymentMethods, setPaymentMethods] = useState<any[]>([])
   const [revenueTrends, setRevenueTrends] = useState<any[]>([])
   const [weeklyRevenue, setWeeklyRevenue] = useState<any[]>([])
+  const [inventoryValueDetail, setInventoryValueDetail] = useState<any[]>([])
+  const [inventoryValueDetailTotals, setInventoryValueDetailTotals] = useState({ quantity: 0, amountValue: 0 })
+  const [loadingInventoryDetail, setLoadingInventoryDetail] = useState(false)
+  const [inventoryDetailLocation, setInventoryDetailLocation] = useState("all")
+  const [inventoryDetailSearch, setInventoryDetailSearch] = useState("")
+  const [inventoryDetailDateFrom, setInventoryDetailDateFrom] = useState("")
+  const [inventoryDetailDateTo, setInventoryDetailDateTo] = useState("")
 
   useEffect(() => {
     loadAnalytics()
   }, [months])
+
+  useEffect(() => {
+    loadInventoryValueDetail()
+  }, [inventoryDetailLocation, inventoryDetailSearch, inventoryDetailDateFrom, inventoryDetailDateTo])
 
   const loadAnalytics = async () => {
     try {
@@ -96,6 +108,26 @@ export default function AnalyticsPage() {
     }
   }
 
+  const loadInventoryValueDetail = async () => {
+    try {
+      setLoadingInventoryDetail(true)
+      const response = await analyticsApi.getInventoryValueByLocation({
+        location: inventoryDetailLocation,
+        search: inventoryDetailSearch || undefined,
+        dateFrom: inventoryDetailDateFrom || undefined,
+        dateTo: inventoryDetailDateTo || undefined,
+      })
+      setInventoryValueDetail(response.data || [])
+      setInventoryValueDetailTotals(response.totals || { quantity: 0, amountValue: 0 })
+    } catch (error) {
+      console.error("Error loading inventory value detail:", error)
+      setInventoryValueDetail([])
+      setInventoryValueDetailTotals({ quantity: 0, amountValue: 0 })
+    } finally {
+      setLoadingInventoryDetail(false)
+    }
+  }
+
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("en-KE", {
       style: "currency",
@@ -103,6 +135,37 @@ export default function AnalyticsPage() {
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(value)
+  }
+
+  const inventoryLocationOptions = useMemo(() => {
+    const names = new Set<string>()
+    ;(inventoryValue?.byLocation || []).forEach((item: any) => {
+      if (item.location) names.add(String(item.location))
+    })
+    inventoryValueDetail.forEach((item: any) => {
+      if (item.location) names.add(String(item.location))
+    })
+    return Array.from(names).sort()
+  }, [inventoryValue, inventoryValueDetail])
+
+  const topInventoryLocations = useMemo(() => {
+    const byLocation = new Map<string, { location: string; amountValue: number; quantity: number; drugCount: number }>()
+    for (const row of inventoryValueDetail) {
+      const location = row.location || "Unassigned"
+      const current = byLocation.get(location) || { location, amountValue: 0, quantity: 0, drugCount: 0 }
+      current.amountValue += Number(row.amountValue || 0)
+      current.quantity += Number(row.quantity || 0)
+      current.drugCount += 1
+      byLocation.set(location, current)
+    }
+    return Array.from(byLocation.values()).sort((a, b) => b.amountValue - a.amountValue).slice(0, 10)
+  }, [inventoryValueDetail])
+
+  const inventoryDetailPeriodLabel = () => {
+    if (inventoryDetailDateFrom && inventoryDetailDateTo) return `${inventoryDetailDateFrom} to ${inventoryDetailDateTo}`
+    if (inventoryDetailDateFrom) return `From ${inventoryDetailDateFrom}`
+    if (inventoryDetailDateTo) return `Up to ${inventoryDetailDateTo}`
+    return "All periods"
   }
 
   if (loading) {
@@ -858,6 +921,202 @@ export default function AnalyticsPage() {
                     </TableBody>
                   </Table>
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Location and Drug Value Concentration</CardTitle>
+              <CardDescription>
+                Drill down from store-level valuation into location, drug, quantity, and amount/value. Period filters use the stock entry date.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Location</label>
+                  <Select value={inventoryDetailLocation} onValueChange={setInventoryDetailLocation}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="All locations" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All locations</SelectItem>
+                      {inventoryLocationOptions.map((location) => (
+                        <SelectItem key={location} value={location}>{location}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Drug</label>
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      className="pl-8"
+                      type="search"
+                      placeholder="Search drug..."
+                      value={inventoryDetailSearch}
+                      onChange={(event) => setInventoryDetailSearch(event.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">From</label>
+                  <Input type="date" value={inventoryDetailDateFrom} onChange={(event) => setInventoryDetailDateFrom(event.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">To</label>
+                  <Input type="date" value={inventoryDetailDateTo} onChange={(event) => setInventoryDetailDateTo(event.target.value)} />
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-3">
+                <Card>
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">Filtered Value</CardTitle>
+                    <DollarSign className="h-4 w-4 text-muted-foreground" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">{formatCurrency(inventoryValueDetailTotals.amountValue || 0)}</div>
+                    <p className="text-xs text-muted-foreground">{inventoryDetailPeriodLabel()}</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">Filtered Quantity</CardTitle>
+                    <Package className="h-4 w-4 text-muted-foreground" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">{Number(inventoryValueDetailTotals.quantity || 0).toLocaleString()}</div>
+                    <p className="text-xs text-muted-foreground">{inventoryValueDetail.length} location-drug rows</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                    <CardTitle className="text-sm font-medium">Locations Represented</CardTitle>
+                    <Store className="h-4 w-4 text-muted-foreground" />
+                  </CardHeader>
+                  <CardContent>
+                    <div className="text-2xl font-bold">{topInventoryLocations.length}</div>
+                    <p className="text-xs text-muted-foreground">After current filters</p>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {loadingInventoryDetail ? (
+                <div className="flex items-center justify-center py-10">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : inventoryValueDetail.length === 0 ? (
+                <div className="rounded-md border py-10 text-center text-muted-foreground">
+                  No inventory value detail matches the current filters.
+                </div>
+              ) : (
+                <>
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-base">Top Locations by Value</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="h-[320px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={topInventoryLocations} layout="vertical">
+                              <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "#333" : "#eee"} />
+                              <XAxis
+                                type="number"
+                                stroke={isDark ? "#ffffff" : "#333"}
+                                tick={{ fill: isDark ? "#ffffff" : "#333", fontSize: 12 }}
+                                tickFormatter={(value) => formatCurrency(value)}
+                              />
+                              <YAxis
+                                type="category"
+                                dataKey="location"
+                                stroke={isDark ? "#ffffff" : "#333"}
+                                tick={{ fill: isDark ? "#ffffff" : "#333", fontSize: 12 }}
+                                width={130}
+                              />
+                              <Tooltip
+                                contentStyle={{
+                                  backgroundColor: isDark ? "#1f2937" : "#fff",
+                                  color: isDark ? "#fff" : "#000",
+                                  border: `1px solid ${isDark ? "#374151" : "#e5e7eb"}`,
+                                }}
+                                formatter={(value: any) => formatCurrency(Number(value || 0))}
+                              />
+                              <Bar dataKey="amountValue" fill="#10b981" radius={[0, 4, 4, 0]} name="Inventory value" />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-base">Value Share by Location</CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="space-y-3">
+                          {topInventoryLocations.map((location) => {
+                            const share = inventoryValueDetailTotals.amountValue > 0
+                              ? (location.amountValue / inventoryValueDetailTotals.amountValue) * 100
+                              : 0
+                            return (
+                              <div key={location.location} className="space-y-1">
+                                <div className="flex items-center justify-between text-sm">
+                                  <span className="font-medium">{location.location}</span>
+                                  <span>{formatCurrency(location.amountValue)} ({share.toFixed(1)}%)</span>
+                                </div>
+                                <div className="h-2 rounded-full bg-muted">
+                                  <div className="h-2 rounded-full bg-emerald-500" style={{ width: `${Math.min(share, 100)}%` }} />
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {location.quantity.toLocaleString()} units across {location.drugCount} drug(s)
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  <div className="rounded-md border">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Location</TableHead>
+                          <TableHead>Drug</TableHead>
+                          <TableHead className="text-right">Quantity</TableHead>
+                          <TableHead className="text-right">Amount/Value</TableHead>
+                          <TableHead className="text-right">Batches</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {inventoryValueDetail.slice(0, 25).map((row: any, index: number) => (
+                          <TableRow key={`${row.location}-${row.medicationId}-${index}`}>
+                            <TableCell className="font-medium">{row.location || "Unassigned"}</TableCell>
+                            <TableCell>
+                              <div className="font-medium">{row.medicationName || "-"}</div>
+                              <div className="text-xs text-muted-foreground">
+                                {[row.medicationCode, row.genericName, row.strength].filter(Boolean).join(" | ") || "-"}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right">{Number(row.quantity || 0).toLocaleString()}</TableCell>
+                            <TableCell className="text-right font-medium">{formatCurrency(Number(row.amountValue || 0))}</TableCell>
+                            <TableCell className="text-right">{Number(row.batchCount || 0).toLocaleString()}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  {inventoryValueDetail.length > 25 && (
+                    <p className="text-xs text-muted-foreground">
+                      Showing top 25 of {inventoryValueDetail.length} matching rows. Use the Pharmacy Inventory Value report for full export.
+                    </p>
+                  )}
+                </>
               )}
             </CardContent>
           </Card>

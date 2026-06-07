@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { TabsContent } from "@/components/ui/tabs"
 import { RoleFilteredTabs } from "@/components/role-filtered-tabs"
 import { Badge } from "@/components/ui/badge"
-import { Search, FileText, Package, Plus, Edit, Loader2, MoreVertical, Eye, CheckCircle, XCircle, Trash2, History, ArrowRight, Sliders, Download, Printer, Pill, AlertCircle, Calendar, Users, List } from "lucide-react"
+import { Search, FileText, Package, Plus, Edit, Loader2, MoreVertical, Eye, CheckCircle, XCircle, Trash2, History, ArrowRight, Sliders, Download, Printer, Pill, AlertCircle, Calendar, Users, List, FileSpreadsheet } from "lucide-react"
 import Link from "next/link"
 import { AddPrescriptionForm } from "@/components/add-prescription-form"
 import { MedicationForm } from "@/components/medication-form"
@@ -99,6 +99,21 @@ interface DrugInventoryItem {
   strength?: string
 }
 
+interface InventoryValueByLocationRow {
+  location: string
+  medicationId: number
+  medicationCode?: string
+  medicationName?: string
+  genericName?: string
+  dosageForm?: string
+  strength?: string
+  quantity: number
+  amountValue: number
+  batchCount?: number
+  earliestExpiryDate?: string
+  latestExpiryDate?: string
+}
+
 export default function PharmacyPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -161,6 +176,14 @@ export default function PharmacyPage() {
   const [drugInventorySummary, setDrugInventorySummary] = useState<any[]>([])
   const [loadingDrugInventorySummary, setLoadingDrugInventorySummary] = useState(true)
   const [drugInventorySummarySearch, setDrugInventorySummarySearch] = useState("")
+  const [inventoryValueRows, setInventoryValueRows] = useState<InventoryValueByLocationRow[]>([])
+  const [inventoryValueTotals, setInventoryValueTotals] = useState({ quantity: 0, amountValue: 0 })
+  const [loadingInventoryValue, setLoadingInventoryValue] = useState(true)
+  const [inventoryValueLocationFilter, setInventoryValueLocationFilter] = useState("all")
+  const [inventoryValueDrugSearch, setInventoryValueDrugSearch] = useState("")
+  const [inventoryValueDateFrom, setInventoryValueDateFrom] = useState("")
+  const [inventoryValueDateTo, setInventoryValueDateTo] = useState("")
+  const [inventoryValueExporting, setInventoryValueExporting] = useState<"excel" | "pdf" | null>(null)
 
   const drugInventoryLocationOptions = useMemo(() => [
     { value: "all", label: "All locations" },
@@ -260,6 +283,164 @@ export default function PharmacyPage() {
   useEffect(() => {
     loadDrugInventorySummary()
   }, [drugInventorySummarySearch])
+
+  const loadInventoryValueByLocation = async () => {
+    try {
+      setLoadingInventoryValue(true)
+      setError(null)
+      const response = await pharmacyApi.getInventoryValueByLocation({
+        location: inventoryValueLocationFilter,
+        search: inventoryValueDrugSearch || undefined,
+        dateFrom: inventoryValueDateFrom || undefined,
+        dateTo: inventoryValueDateTo || undefined,
+      })
+      setInventoryValueRows(response.data || [])
+      setInventoryValueTotals(response.totals || { quantity: 0, amountValue: 0 })
+    } catch (err: any) {
+      setError(err.message || 'Failed to load inventory value by location')
+      console.error('Error loading inventory value by location:', err)
+    } finally {
+      setLoadingInventoryValue(false)
+    }
+  }
+
+  useEffect(() => {
+    loadInventoryValueByLocation()
+  }, [inventoryValueLocationFilter, inventoryValueDrugSearch, inventoryValueDateFrom, inventoryValueDateTo])
+
+  const formatMoney = (value: any) =>
+    `KES ${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+  const formatReportDate = (value?: string) => {
+    if (!value) return '-'
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? '-' : date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+  }
+
+  const inventoryValuePeriodLabel = () => {
+    if (inventoryValueDateFrom && inventoryValueDateTo) return `${inventoryValueDateFrom} to ${inventoryValueDateTo}`
+    if (inventoryValueDateFrom) return `From ${inventoryValueDateFrom}`
+    if (inventoryValueDateTo) return `Up to ${inventoryValueDateTo}`
+    return 'All periods'
+  }
+
+  const inventoryValueExportRows = () =>
+    inventoryValueRows.map((row, index) => ({
+      "#": index + 1,
+      Location: row.location || 'Unassigned',
+      Drug: row.medicationName || '-',
+      "Drug Code": row.medicationCode || '-',
+      "Generic Name": row.genericName || '-',
+      "Dosage Form": row.dosageForm || '-',
+      Strength: row.strength || '-',
+      Quantity: Number(row.quantity || 0),
+      "Amount/Value": Number(row.amountValue || 0),
+      "Batch Count": Number(row.batchCount || 0),
+      "Earliest Expiry": formatReportDate(row.earliestExpiryDate),
+      "Latest Expiry": formatReportDate(row.latestExpiryDate),
+    }))
+
+  const exportInventoryValueExcel = async () => {
+    if (typeof window === 'undefined') return
+    try {
+      setInventoryValueExporting("excel")
+      const xlsxModule = await import("xlsx")
+      const XLSX = (xlsxModule as any).default || xlsxModule
+      const wb = XLSX.utils.book_new()
+      const summaryRows = [
+        { Metric: "Generated", Value: new Date().toLocaleString() },
+        { Metric: "Period", Value: inventoryValuePeriodLabel() },
+        { Metric: "Location", Value: inventoryValueLocationFilter === "all" ? "All locations" : inventoryValueLocationFilter },
+        { Metric: "Drug filter", Value: inventoryValueDrugSearch || "All drugs" },
+        { Metric: "Total quantity", Value: inventoryValueTotals.quantity },
+        { Metric: "Total amount/value", Value: inventoryValueTotals.amountValue },
+      ]
+      const summarySheet = XLSX.utils.json_to_sheet(summaryRows)
+      summarySheet["!cols"] = [{ wch: 24 }, { wch: 36 }]
+      XLSX.utils.book_append_sheet(wb, summarySheet, "Summary")
+
+      const rows = inventoryValueExportRows().map((row) => ({
+        ...row,
+        "Amount/Value": Number(row["Amount/Value"] || 0),
+      }))
+      const sheet = XLSX.utils.json_to_sheet(rows)
+      sheet["!cols"] = [
+        { wch: 6 }, { wch: 28 }, { wch: 36 }, { wch: 16 }, { wch: 28 }, { wch: 16 },
+        { wch: 14 }, { wch: 12 }, { wch: 18 }, { wch: 12 }, { wch: 16 }, { wch: 16 },
+      ]
+      XLSX.utils.book_append_sheet(wb, sheet, "Inventory Value")
+      XLSX.writeFile(wb, `Inventory_Value_By_Location_${new Date().toISOString().split('T')[0]}.xlsx`)
+    } catch (err: any) {
+      setError(err.message || "Failed to export inventory value report")
+    } finally {
+      setInventoryValueExporting(null)
+    }
+  }
+
+  const exportInventoryValuePdf = async () => {
+    if (typeof window === 'undefined') return
+    try {
+      setInventoryValueExporting("pdf")
+      const [{ default: jsPDF }, autoTableModule] = await Promise.all([import("jspdf"), import("jspdf-autotable")])
+      const autoTable =
+        (autoTableModule as any).default ||
+        (autoTableModule as any).autoTable ||
+        ((doc: any, options: any) => doc.autoTable(options))
+      const pdf = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" })
+      const pageWidth = pdf.internal.pageSize.getWidth()
+
+      pdf.setFillColor(15, 76, 117)
+      pdf.rect(0, 0, pageWidth, 26, "F")
+      pdf.setTextColor(255, 255, 255)
+      pdf.setFontSize(16)
+      pdf.text("Inventory Value by Location", 14, 11)
+      pdf.setFontSize(9)
+      pdf.text(`Period: ${inventoryValuePeriodLabel()} | Location: ${inventoryValueLocationFilter === "all" ? "All locations" : inventoryValueLocationFilter} | Generated: ${new Date().toLocaleString()}`, 14, 19)
+      pdf.setTextColor(0, 0, 0)
+
+      autoTable(pdf, {
+        head: [["Location", "Drug", "Quantity", "Amount/Value", "Batches", "Earliest Expiry", "Latest Expiry"]],
+        body: inventoryValueRows.map((row) => [
+          row.location || "Unassigned",
+          row.medicationName || "-",
+          String(Number(row.quantity || 0)),
+          formatMoney(row.amountValue),
+          String(Number(row.batchCount || 0)),
+          formatReportDate(row.earliestExpiryDate),
+          formatReportDate(row.latestExpiryDate),
+        ]),
+        foot: [["Total", "", String(inventoryValueTotals.quantity || 0), formatMoney(inventoryValueTotals.amountValue), "", "", ""]],
+        startY: 34,
+        theme: "striped",
+        headStyles: { fillColor: [15, 76, 117], textColor: 255, fontStyle: "bold" },
+        footStyles: { fillColor: [229, 241, 248], textColor: 20, fontStyle: "bold" },
+        alternateRowStyles: { fillColor: [245, 248, 250] },
+        styles: { fontSize: 8, cellPadding: 2, overflow: "linebreak", valign: "top" },
+        columnStyles: {
+          0: { cellWidth: 42 },
+          1: { cellWidth: 76 },
+          2: { cellWidth: 24, halign: "right" },
+          3: { cellWidth: 34, halign: "right" },
+          4: { cellWidth: 20, halign: "right" },
+          5: { cellWidth: 32 },
+          6: { cellWidth: 32 },
+        },
+      })
+
+      const pageCount = (pdf as any).internal.getNumberOfPages()
+      for (let page = 1; page <= pageCount; page++) {
+        pdf.setPage(page)
+        pdf.setFontSize(8)
+        pdf.setTextColor(120, 120, 120)
+        pdf.text(`Page ${page} of ${pageCount}`, pageWidth - 28, pdf.internal.pageSize.getHeight() - 8)
+      }
+      pdf.save(`Inventory_Value_By_Location_${new Date().toISOString().split('T')[0]}.pdf`)
+    } catch (err: any) {
+      setError(err.message || "Failed to export inventory value PDF")
+    } finally {
+      setInventoryValueExporting(null)
+    }
+  }
 
   const handleExportSummary = () => {
     // Create CSV content
@@ -1414,6 +1595,7 @@ export default function PharmacyPage() {
           { value: "medications", label: "Medications" },
           { value: "drug-inventory", label: "Drug Inventory" },
           { value: "drug-inventory-summary", label: "Inventory Summary" },
+          { value: "inventory-value", label: "Inventory Value" },
           { value: "batch-trace", label: "Batch Trace" },
           { value: "drug-history", label: "Drug History" },
           { value: "nurse-pickup", label: "Nurse Pickup" },
@@ -2136,6 +2318,137 @@ export default function PharmacyPage() {
                         <TableRow>
                           <TableCell colSpan={13} className="text-center py-8 text-muted-foreground">
                             No drug inventory summary found
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="inventory-value" className="space-y-4 mt-4">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <CardTitle>Inventory Value by Location</CardTitle>
+                  <CardDescription>Summary of current stock quantity and value grouped by location and drug.</CardDescription>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={loadInventoryValueByLocation} disabled={loadingInventoryValue}>
+                    {loadingInventoryValue ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
+                    Refresh
+                  </Button>
+                  <Button variant="outline" onClick={exportInventoryValueExcel} disabled={inventoryValueExporting === "excel" || inventoryValueRows.length === 0}>
+                    {inventoryValueExporting === "excel" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileSpreadsheet className="mr-2 h-4 w-4" />}
+                    Excel
+                  </Button>
+                  <Button onClick={exportInventoryValuePdf} disabled={inventoryValueExporting === "pdf" || inventoryValueRows.length === 0}>
+                    {inventoryValueExporting === "pdf" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                    PDF
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Location</label>
+                  <SearchableSelect
+                    value={inventoryValueLocationFilter}
+                    onValueChange={setInventoryValueLocationFilter}
+                    options={drugInventoryLocationOptions}
+                    placeholder="Filter by location..."
+                    emptyMessage="No location found."
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Drug</label>
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      type="search"
+                      placeholder="Search drug..."
+                      className="pl-8"
+                      value={inventoryValueDrugSearch}
+                      onChange={(event) => setInventoryValueDrugSearch(event.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">From</label>
+                  <Input type="date" value={inventoryValueDateFrom} onChange={(event) => setInventoryValueDateFrom(event.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">To</label>
+                  <Input type="date" value={inventoryValueDateTo} onChange={(event) => setInventoryValueDateTo(event.target.value)} />
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-3">
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Rows</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-2xl font-bold">{inventoryValueRows.length}</CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Total Quantity</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-2xl font-bold">{Number(inventoryValueTotals.quantity || 0).toLocaleString()}</CardContent>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Total Amount/Value</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-2xl font-bold">{formatMoney(inventoryValueTotals.amountValue)}</CardContent>
+                </Card>
+              </div>
+
+              {loadingInventoryValue ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <div className="rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Location</TableHead>
+                        <TableHead>Drug</TableHead>
+                        <TableHead className="text-right">Quantity</TableHead>
+                        <TableHead className="text-right">Amount/Value</TableHead>
+                        <TableHead className="text-right">Batches</TableHead>
+                        <TableHead>Earliest Expiry</TableHead>
+                        <TableHead>Latest Expiry</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {inventoryValueRows.length > 0 ? (
+                        inventoryValueRows.map((row, index) => (
+                          <TableRow key={`${row.location}-${row.medicationId}-${index}`}>
+                            <TableCell className="font-medium">{row.location || "Unassigned"}</TableCell>
+                            <TableCell>
+                              <div className="font-medium">{row.medicationName || "-"}</div>
+                              <div className="text-xs text-muted-foreground">
+                                {[row.medicationCode, row.genericName, row.strength].filter(Boolean).join(" | ") || "-"}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right font-medium">{Number(row.quantity || 0).toLocaleString()}</TableCell>
+                            <TableCell className="text-right font-medium">{formatMoney(row.amountValue)}</TableCell>
+                            <TableCell className="text-right">{Number(row.batchCount || 0).toLocaleString()}</TableCell>
+                            <TableCell>{formatReportDate(row.earliestExpiryDate)}</TableCell>
+                            <TableCell>{formatReportDate(row.latestExpiryDate)}</TableCell>
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
+                            No inventory value records match the current filters.
                           </TableCell>
                         </TableRow>
                       )}

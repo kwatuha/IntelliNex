@@ -909,6 +909,83 @@ router.get('/drug-inventory/summary', async (req, res) => {
 });
 
 /**
+ * @route GET /api/pharmacy/drug-inventory/value-by-location
+ * @description Inventory value summary grouped by location and drug
+ */
+router.get('/drug-inventory/value-by-location', async (req, res) => {
+    try {
+        const { location, search, dateFrom, dateTo } = req.query;
+        const params = [];
+
+        let query = `
+            SELECT
+                COALESCE(ds.storeName, di.location, 'Unassigned') AS location,
+                m.medicationId,
+                m.medicationCode,
+                m.name AS medicationName,
+                m.genericName,
+                m.dosageForm,
+                m.strength,
+                SUM(COALESCE(di.quantity, 0)) AS quantity,
+                SUM(COALESCE(di.quantity, 0) * COALESCE(di.sellPrice, 0)) AS amountValue,
+                COUNT(*) AS batchCount,
+                MIN(di.expiryDate) AS earliestExpiryDate,
+                MAX(di.expiryDate) AS latestExpiryDate
+            FROM drug_inventory di
+            LEFT JOIN medications m ON di.medicationId = m.medicationId
+            LEFT JOIN drug_stores ds ON di.storeId = ds.storeId
+            WHERE COALESCE(di.status, 'active') = 'active'
+              AND COALESCE(di.quantity, 0) > 0
+        `;
+
+        if (location && location !== 'all') {
+            query += ` AND COALESCE(ds.storeName, di.location, 'Unassigned') = ?`;
+            params.push(location);
+        }
+
+        if (search) {
+            query += ` AND (m.name LIKE ? OR m.genericName LIKE ? OR m.medicationCode LIKE ? OR di.batchNumber LIKE ?)`;
+            const term = `%${search}%`;
+            params.push(term, term, term, term);
+        }
+
+        if (dateFrom) {
+            query += ` AND DATE(di.createdAt) >= ?`;
+            params.push(dateFrom);
+        }
+
+        if (dateTo) {
+            query += ` AND DATE(di.createdAt) <= ?`;
+            params.push(dateTo);
+        }
+
+        query += `
+            GROUP BY
+                COALESCE(ds.storeName, di.location, 'Unassigned'),
+                m.medicationId,
+                m.medicationCode,
+                m.name,
+                m.genericName,
+                m.dosageForm,
+                m.strength
+            ORDER BY location ASC, medicationName ASC
+        `;
+
+        const [rows] = await pool.execute(query, params);
+        const totals = rows.reduce((acc, row) => {
+            acc.quantity += Number(row.quantity || 0);
+            acc.amountValue += Number(row.amountValue || 0);
+            return acc;
+        }, { quantity: 0, amountValue: 0 });
+
+        res.status(200).json({ data: rows, totals });
+    } catch (error) {
+        console.error('Error fetching inventory value by location:', error);
+        res.status(500).json({ message: 'Error fetching inventory value by location', error: error.message });
+    }
+});
+
+/**
  * @route GET /api/pharmacy/drug-inventory/:id
  * @description Get a single drug inventory item by ID
  */

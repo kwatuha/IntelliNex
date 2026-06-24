@@ -9,10 +9,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
-import { AlertTriangle, CheckCircle2, Clock, Copy, FlaskConical, Loader2, MapPin, Package, PackageCheck, RefreshCw, Search, Store, Users } from "lucide-react"
+import { AlertTriangle, CheckCircle2, Clock, Copy, FlaskConical, Loader2, MapPin, Package, PackageCheck, RefreshCw, Search, Store, Truck, Users } from "lucide-react"
 import Link from "next/link"
 import { useAuth } from "@/lib/auth/auth-context"
 import { pharmacyApi } from "@/lib/api"
+import { ChemistPortalNav } from "@/components/chemist-portal-nav"
 
 type ChemistReferral = {
   referralId: number
@@ -410,6 +411,7 @@ export function ChemistReferrals() {
 
   return (
     <div className="space-y-4">
+      <ChemistPortalNav />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Chemist Referrals</h1>
@@ -544,6 +546,9 @@ export function ChemistReferrals() {
                 <div className="mt-4 flex flex-wrap gap-2">
                   <Button variant="outline" size="sm" asChild>
                     <Link href="/chemist/drugs">{canManageReferrals ? "Update" : "View"} Drug Availability</Link>
+                  </Button>
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href="/chemist/stock-requests">Request stock from hospital</Link>
                   </Button>
                   <Button variant="outline" size="sm" asChild>
                     <Link href="/chemist/labs">{canManageReferrals ? "Update" : "View"} Available Labs</Link>

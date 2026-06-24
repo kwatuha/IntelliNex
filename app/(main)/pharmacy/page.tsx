@@ -20,6 +20,7 @@ import { StockAdjustmentForm } from "@/components/stock-adjustment-form"
 import { DispenseMedicationDialog } from "@/components/dispense-medication-dialog"
 import { NursePickup } from "@/components/nurse-pickup"
 import { ExternalReferrals } from "@/components/external-referrals"
+import { DrugMovement } from "@/components/drug-movement"
 import { pharmacyApi } from "@/lib/api"
 import { SearchableSelect } from "@/components/ui/searchable-select"
 import {
@@ -1599,6 +1600,7 @@ export default function PharmacyPage() {
           { value: "batch-trace", label: "Batch Trace" },
           { value: "drug-history", label: "Drug History" },
           { value: "nurse-pickup", label: "Nurse Pickup" },
+          { value: "drug-movement", label: "Drug Movement" },
           { value: "external-referrals", label: "External Referrals" },
         ]}
         pagePath="/pharmacy"
@@ -2494,6 +2496,10 @@ export default function PharmacyPage() {
 
         <TabsContent value="nurse-pickup" className="space-y-4 mt-4">
           <NursePickup />
+        </TabsContent>
+
+        <TabsContent value="drug-movement" className="space-y-4 mt-4">
+          <DrugMovement />
         </TabsContent>
 
         <TabsContent value="external-referrals" className="space-y-4 mt-4">

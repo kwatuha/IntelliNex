@@ -4,6 +4,20 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { resolveReferralOrigin } = require('../lib/branchContext');
+const {
+  generateDocumentNumber,
+  findFifoBatchForStore,
+  deductInventoryBatch,
+  buildStoreInventoryFilter,
+  buildBranchStoreInventoryFilter,
+  branchInventoryFilterParams,
+} = require('../lib/drugMovement');
+const {
+  notifyPharmacyStaff,
+  notifyChemistUsers,
+  checkStoreReorderLevels,
+  getStoreStockQuantity,
+} = require('../lib/pharmacyNotifications');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'your_fallback_secret_for_dev_only_change_this_asap';
@@ -163,16 +177,22 @@ async function requirePrimaryChemistUser(req) {
 
 async function resolveChemistIdForRequest(req, requestedChemistId = null) {
   const user = getAuthUser(req);
-  if (user && isChemistUser(user)) {
+  const explicitId = Number(requestedChemistId);
+  if (Number.isFinite(explicitId) && explicitId > 0) {
+    return explicitId;
+  }
+  if (user) {
     const scope = await getChemistScopeForUser(user.id || user.userId);
-    if (!scope) {
+    if (scope?.chemistId) {
+      return Number(scope.chemistId);
+    }
+    if (isChemistUser(user)) {
       const error = new Error('Chemist user is not assigned to a chemist');
       error.status = 403;
       throw error;
     }
-    return Number(scope.chemistId);
   }
-  return Number(requestedChemistId);
+  return null;
 }
 
 async function fetchChemistDrugs(chemistId, filters = {}, executor = pool, options = {}) {
@@ -2177,6 +2197,640 @@ router.get('/chemist/me', async (req, res) => {
   } catch (error) {
     console.error('Error fetching chemist scope:', error);
     res.status(500).json({ error: 'Failed to fetch chemist scope', message: error.message });
+  }
+});
+
+async function resolveDefaultSourceStoreId(executor = pool) {
+  const [rows] = await executor.execute(
+    `SELECT ds.storeId,
+            (SELECT COALESCE(SUM(di.quantity), 0)
+             FROM drug_inventory di
+             WHERE di.quantity > 0
+               AND di.status = 'active'
+               AND (di.expiryDate IS NULL OR di.expiryDate >= CURDATE())
+               AND (
+                 di.storeId = ds.storeId
+                 OR (
+                   di.storeId IS NULL
+                   AND di.location IN (ds.storeName, ds.storeCode, ds.location)
+                 )
+               )
+            ) AS stockQty
+     FROM drug_stores ds
+     INNER JOIN branches b ON ds.branchId = b.branchId
+     WHERE ds.isActive = 1 AND b.isActive = 1
+     ORDER BY stockQty DESC, b.isMainBranch DESC, ds.isDispensingStore ASC, ds.storeId ASC
+     LIMIT 1`
+  );
+  return rows[0]?.storeId || null;
+}
+
+async function fetchChemistStockRequestById(requestId, executor = pool) {
+  const [rows] = await executor.execute(
+    `SELECT r.*,
+            ec.chemistName,
+            ec.chemistCode,
+            ds.storeName AS sourceStoreName,
+            ds.storeCode AS sourceStoreCode,
+            b.branchName AS sourceBranchName,
+            ru.firstName AS requestedByFirstName,
+            ru.lastName AS requestedByLastName,
+            pu.firstName AS processedByFirstName,
+            pu.lastName AS processedByLastName,
+            du.firstName AS dispatchedByFirstName,
+            du.lastName AS dispatchedByLastName,
+            rcu.firstName AS receivedByFirstName,
+            rcu.lastName AS receivedByLastName
+     FROM external_chemist_stock_requests r
+     INNER JOIN external_chemists ec ON r.chemistId = ec.chemistId
+     INNER JOIN drug_stores ds ON r.sourceStoreId = ds.storeId
+     LEFT JOIN branches b ON ds.branchId = b.branchId
+     LEFT JOIN users ru ON r.requestedBy = ru.userId
+     LEFT JOIN users pu ON r.processedBy = pu.userId
+     LEFT JOIN users du ON r.dispatchedBy = du.userId
+     LEFT JOIN users rcu ON r.receivedBy = rcu.userId
+     WHERE r.requestId = ?`,
+    [requestId]
+  );
+  if (!rows.length) return null;
+  const request = rows[0];
+  const [items] = await executor.execute(
+    `SELECT i.*, m.name AS catalogMedicationName, m.genericName, m.strength, m.dosageForm
+     FROM external_chemist_stock_request_items i
+     LEFT JOIN medications m ON i.medicationId = m.medicationId
+     WHERE i.requestId = ?
+     ORDER BY i.requestItemId ASC`,
+    [requestId]
+  );
+  request.items = items;
+  return request;
+}
+
+router.get('/chemist-stock-requests', async (req, res) => {
+  try {
+    const user = getAuthUser(req);
+    if (!user) return res.status(401).json({ error: 'Authentication required' });
+
+    const { status, chemistId, sourceStoreId, search, page = 1, limit = 50 } = req.query;
+    const offset = (Number(page) - 1) * Number(limit);
+    const params = [];
+    let query = `
+      SELECT r.*,
+             ec.chemistName,
+             ec.chemistCode,
+             ds.storeName AS sourceStoreName,
+             b.branchName AS sourceBranchName,
+             (SELECT COUNT(*) FROM external_chemist_stock_request_items i WHERE i.requestId = r.requestId) AS itemCount
+      FROM external_chemist_stock_requests r
+      INNER JOIN external_chemists ec ON r.chemistId = ec.chemistId
+      INNER JOIN drug_stores ds ON r.sourceStoreId = ds.storeId
+      LEFT JOIN branches b ON ds.branchId = b.branchId
+      WHERE 1=1
+    `;
+
+    if (isChemistUser(user)) {
+      const scopedChemistId = await resolveChemistIdForRequest(req, chemistId);
+      query += ' AND r.chemistId = ?';
+      params.push(scopedChemistId);
+    } else if (chemistId) {
+      query += ' AND r.chemistId = ?';
+      params.push(chemistId);
+    }
+
+    if (status) {
+      query += ' AND r.status = ?';
+      params.push(status);
+    }
+    if (sourceStoreId) {
+      query += ' AND r.sourceStoreId = ?';
+      params.push(sourceStoreId);
+    }
+    if (search) {
+      query += ' AND (r.requestNumber LIKE ? OR ec.chemistName LIKE ?)';
+      const term = `%${search}%`;
+      params.push(term, term);
+    }
+
+    query += ` ORDER BY r.createdAt DESC LIMIT ${Number(limit)} OFFSET ${offset}`;
+    const [rows] = await pool.execute(query, params);
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching chemist stock requests:', error);
+    res.status(error.status || 500).json({ error: 'Failed to fetch chemist stock requests', message: error.message });
+  }
+});
+
+router.get('/chemist-stock-requests/:id', async (req, res) => {
+  try {
+    const user = getAuthUser(req);
+    if (!user) return res.status(401).json({ error: 'Authentication required' });
+
+    const request = await fetchChemistStockRequestById(req.params.id);
+    if (!request) return res.status(404).json({ error: 'Stock request not found' });
+
+    if (isChemistUser(user)) {
+      const scopedChemistId = await resolveChemistIdForRequest(req, null);
+      if (Number(request.chemistId) !== Number(scopedChemistId)) {
+        return res.status(403).json({ error: 'Access denied for this stock request' });
+      }
+    }
+
+    res.json(request);
+  } catch (error) {
+    console.error('Error fetching chemist stock request:', error);
+    res.status(error.status || 500).json({ error: 'Failed to fetch chemist stock request', message: error.message });
+  }
+});
+
+router.post('/chemist/stock-requests', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const user = getAuthUser(req);
+    if (!user) {
+      await connection.rollback();
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const chemistId = await resolveChemistIdForRequest(req, req.body?.chemistId);
+    if (!chemistId) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'Chemist is required' });
+    }
+
+    const { items = [], notes } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'At least one item is required' });
+    }
+
+    let sourceStoreId = Number(req.body?.sourceStoreId) || null;
+    if (!sourceStoreId) {
+      sourceStoreId = await resolveDefaultSourceStoreId(connection);
+    }
+    if (!sourceStoreId) {
+      await connection.rollback();
+      return res.status(400).json({ error: 'No source store configured. Please select a hospital store.' });
+    }
+
+    const requestNumber = await generateDocumentNumber(
+      'CSR',
+      'external_chemist_stock_requests',
+      'requestNumber',
+      connection
+    );
+    const userId = user.id || user.userId || null;
+    const [requestResult] = await connection.execute(
+      `INSERT INTO external_chemist_stock_requests
+       (requestNumber, chemistId, sourceStoreId, status, requestDate, requestedBy, notes)
+       VALUES (?, ?, ?, 'pending', CURDATE(), ?, ?)`,
+      [requestNumber, chemistId, sourceStoreId, userId, notes || null]
+    );
+    const requestId = requestResult.insertId;
+
+    for (const item of items) {
+      const medicationId = Number(item.medicationId);
+      const quantityRequested = Number(item.quantityRequested ?? item.quantity);
+      if (!medicationId || !Number.isFinite(quantityRequested) || quantityRequested <= 0) {
+        await connection.rollback();
+        return res.status(400).json({ error: 'Each item requires medicationId and a positive quantity' });
+      }
+
+      const [medRows] = await connection.execute(
+        'SELECT medicationId, name FROM medications WHERE medicationId = ? AND voided = 0',
+        [medicationId]
+      );
+      if (!medRows.length) {
+        await connection.rollback();
+        return res.status(400).json({ error: `Medication ${medicationId} not found` });
+      }
+
+      await connection.execute(
+        `INSERT INTO external_chemist_stock_request_items
+         (requestId, medicationId, medicationName, quantityRequested, notes)
+         VALUES (?, ?, ?, ?, ?)`,
+        [requestId, medicationId, medRows[0].name, quantityRequested, item.notes || null]
+      );
+    }
+
+    const shortages = [];
+    for (const item of items) {
+      const medicationId = Number(item.medicationId);
+      const quantityRequested = Number(item.quantityRequested ?? item.quantity);
+      const available = await getStoreStockQuantity(connection, sourceStoreId, medicationId);
+      if (available < quantityRequested) {
+        const [medRows] = await connection.execute(
+          'SELECT name FROM medications WHERE medicationId = ?',
+          [medicationId]
+        );
+        shortages.push({
+          medicationId,
+          medicationName: medRows[0]?.name || `Medication ${medicationId}`,
+          quantityRequested,
+          available,
+        });
+      }
+    }
+
+    await connection.commit();
+    const createdRequest = await fetchChemistStockRequestById(requestId);
+    await notifyPharmacyStaff(pool, {
+      notificationType: 'chemist_stock_request',
+      title: `Chemist stock request: ${requestNumber}`,
+      message: `${createdRequest.chemistName} submitted a stock request with ${items.length} item(s).`,
+      priority: 'high',
+      storeId: sourceStoreId,
+      referenceType: 'chemist_stock_request',
+      referenceId: requestId,
+    }).catch(() => {});
+
+    if (shortages.length) {
+      const shortageSummary = shortages
+        .map((row) => `${row.medicationName}: requested ${row.quantityRequested}, available ${row.available}`)
+        .join('; ');
+      await notifyPharmacyStaff(pool, {
+        notificationType: 'chemist_stock_unavailable',
+        title: `Insufficient stock for ${requestNumber}`,
+        message: `${createdRequest.chemistName} requested items that exceed current store stock. ${shortageSummary}`,
+        priority: 'high',
+        storeId: sourceStoreId,
+        referenceType: 'chemist_stock_request',
+        referenceId: requestId,
+      }).catch(() => {});
+    }
+    res.status(201).json(createdRequest);
+  } catch (error) {
+    await connection.rollback();
+    console.error('Error creating chemist stock request:', error);
+    res.status(error.status || 500).json({ error: 'Failed to create chemist stock request', message: error.message });
+  } finally {
+    connection.release();
+  }
+});
+
+router.patch('/chemist-stock-requests/:id/status', async (req, res) => {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const user = getAuthUser(req);
+    if (!user) {
+      await connection.rollback();
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const { status, notes, items = [] } = req.body || {};
+    const userId = user.id || user.userId || null;
+    const allowedStatuses = ['approved', 'dispatched', 'received', 'rejected', 'cancelled'];
+    if (!allowedStatuses.includes(status)) {
+      await connection.rollback();
+      return res.status(400).json({ error: `status must be one of: ${allowedStatuses.join(', ')}` });
+    }
+
+    const [requestRows] = await connection.execute(
+      'SELECT * FROM external_chemist_stock_requests WHERE requestId = ? FOR UPDATE',
+      [req.params.id]
+    );
+    if (!requestRows.length) {
+      await connection.rollback();
+      return res.status(404).json({ error: 'Stock request not found' });
+    }
+    const request = requestRows[0];
+
+    if (isChemistUser(user)) {
+      const scopedChemistId = await resolveChemistIdForRequest(req, null);
+      if (Number(request.chemistId) !== Number(scopedChemistId)) {
+        await connection.rollback();
+        return res.status(403).json({ error: 'Access denied for this stock request' });
+      }
+      if (!['cancelled', 'received'].includes(status)) {
+        await connection.rollback();
+        return res.status(403).json({ error: 'Chemist users can only cancel or receive stock requests' });
+      }
+    }
+
+    const [requestItems] = await connection.execute(
+      'SELECT * FROM external_chemist_stock_request_items WHERE requestId = ? ORDER BY requestItemId ASC',
+      [request.requestId]
+    );
+
+    if (status === 'cancelled') {
+      if (request.status !== 'pending') {
+        await connection.rollback();
+        return res.status(400).json({ error: 'Only pending requests can be cancelled' });
+      }
+      await connection.execute(
+        `UPDATE external_chemist_stock_requests
+         SET status = 'cancelled', notes = COALESCE(?, notes), updatedAt = NOW()
+         WHERE requestId = ?`,
+        [notes || null, request.requestId]
+      );
+      await connection.commit();
+      return res.json(await fetchChemistStockRequestById(request.requestId));
+    }
+
+    if (status === 'rejected') {
+      if (!['pending', 'approved'].includes(request.status)) {
+        await connection.rollback();
+        return res.status(400).json({ error: 'Only pending or approved requests can be rejected' });
+      }
+      await connection.execute(
+        `UPDATE external_chemist_stock_requests
+         SET status = 'rejected', processedBy = ?, notes = COALESCE(?, notes), updatedAt = NOW()
+         WHERE requestId = ?`,
+        [userId, notes || null, request.requestId]
+      );
+      await connection.commit();
+      return res.json(await fetchChemistStockRequestById(request.requestId));
+    }
+
+    if (status === 'approved') {
+      if (request.status !== 'pending') {
+        await connection.rollback();
+        return res.status(400).json({ error: 'Only pending requests can be approved' });
+      }
+      await connection.execute(
+        `UPDATE external_chemist_stock_requests
+         SET status = 'approved', processedBy = ?, notes = COALESCE(?, notes), updatedAt = NOW()
+         WHERE requestId = ?`,
+        [userId, notes || null, request.requestId]
+      );
+      await connection.commit();
+      return res.json(await fetchChemistStockRequestById(request.requestId));
+    }
+
+    if (status === 'dispatched') {
+      if (!['pending', 'approved'].includes(request.status)) {
+        await connection.rollback();
+        return res.status(400).json({ error: 'Only pending or approved requests can be dispatched' });
+      }
+
+      const dispatchItems = Array.isArray(items) && items.length ? items : requestItems.map((item) => ({
+        requestItemId: item.requestItemId,
+        quantityDispatched: item.quantityRequested,
+      }));
+
+      const storeFilter = buildBranchStoreInventoryFilter('di', '?');
+      const storeFilterParams = branchInventoryFilterParams(request.sourceStoreId);
+
+      for (const dispatchItem of dispatchItems) {
+        const line = requestItems.find((row) => Number(row.requestItemId) === Number(dispatchItem.requestItemId));
+        if (!line) {
+          await connection.rollback();
+          return res.status(400).json({ error: `Request item ${dispatchItem.requestItemId} not found` });
+        }
+
+        const qty = Number(dispatchItem.quantityDispatched ?? line.quantityRequested);
+        if (!Number.isFinite(qty) || qty <= 0) {
+          await connection.rollback();
+          return res.status(400).json({ error: 'Dispatched quantity must be positive' });
+        }
+
+        const batchLines = Array.isArray(dispatchItem.batches) && dispatchItem.batches.length
+          ? dispatchItem.batches.map((batch) => ({
+              drugInventoryId: batch.drugInventoryId,
+              quantity: Number(batch.quantity),
+            }))
+          : [{
+              drugInventoryId: dispatchItem.drugInventoryId || line.drugInventoryId || null,
+              quantity: qty,
+            }];
+
+        const batchTotal = batchLines.reduce((sum, batch) => sum + (Number(batch.quantity) || 0), 0);
+        if (batchTotal !== qty) {
+          await connection.rollback();
+          return res.status(400).json({
+            error: `Batch quantities must total ${qty} for ${line.medicationName || line.medicationId}. Current total: ${batchTotal}`,
+          });
+        }
+
+        const deductedBatches = [];
+        for (const batchLine of batchLines) {
+          const lineQty = Number(batchLine.quantity);
+          if (!Number.isFinite(lineQty) || lineQty <= 0) {
+            await connection.rollback();
+            return res.status(400).json({ error: 'Each batch quantity must be positive' });
+          }
+
+          let drugInventoryId = batchLine.drugInventoryId || null;
+          let sourceBatch = null;
+          if (drugInventoryId) {
+            const [batchRows] = await connection.execute(
+              `SELECT di.* FROM drug_inventory di
+               WHERE di.drugInventoryId = ?
+                 AND di.medicationId = ?
+                 AND ${storeFilter}
+               FOR UPDATE`,
+              [drugInventoryId, line.medicationId, ...storeFilterParams]
+            );
+            sourceBatch = batchRows[0] || null;
+          } else {
+            sourceBatch = await findFifoBatchForStore(connection, line.medicationId, request.sourceStoreId);
+            drugInventoryId = sourceBatch?.drugInventoryId || null;
+          }
+
+          if (!sourceBatch) {
+            await connection.rollback();
+            return res.status(400).json({ error: `No available stock for ${line.medicationName || line.medicationId}` });
+          }
+          if ((Number(sourceBatch.quantity) || 0) < lineQty) {
+            await connection.rollback();
+            return res.status(400).json({
+              error: `Insufficient stock in batch ${sourceBatch.batchNumber} for ${line.medicationName || line.medicationId}. Available: ${sourceBatch.quantity}, requested: ${lineQty}`,
+            });
+          }
+
+          await deductInventoryBatch(connection, {
+            drugInventoryId,
+            quantity: lineQty,
+            userId,
+            referenceType: 'chemist_stock_request',
+            referenceId: request.requestId,
+            referenceNumber: request.requestNumber,
+            notes: notes || `Dispatched to chemist ${request.chemistId}`,
+          });
+          deductedBatches.push({ batch: sourceBatch, quantity: lineQty, drugInventoryId });
+        }
+
+        const primaryBatch = deductedBatches[0]?.batch || null;
+        const batchSummary = deductedBatches.length > 1
+          ? deductedBatches.map((entry) => `${entry.batch.batchNumber} (${entry.quantity})`).join(', ')
+          : null;
+
+        await connection.execute(
+          `UPDATE external_chemist_stock_request_items
+           SET quantityDispatched = ?, drugInventoryId = ?, batchNumber = ?, unitPrice = ?, sellPrice = ?, expiryDate = ?,
+               notes = CASE WHEN ? IS NULL THEN notes ELSE CONCAT(COALESCE(notes, ''), CASE WHEN notes IS NULL OR notes = '' THEN '' ELSE '; ' END, ?) END
+           WHERE requestItemId = ?`,
+          [
+            qty,
+            primaryBatch?.drugInventoryId || null,
+            primaryBatch?.batchNumber || null,
+            primaryBatch?.unitPrice || null,
+            primaryBatch?.sellPrice || null,
+            primaryBatch?.expiryDate || null,
+            batchSummary,
+            batchSummary ? `Batches: ${batchSummary}` : null,
+            line.requestItemId,
+          ]
+        );
+      }
+
+      await connection.execute(
+        `UPDATE external_chemist_stock_requests
+         SET status = 'dispatched',
+             dispatchedBy = ?,
+             dispatchedAt = NOW(),
+             processedBy = COALESCE(processedBy, ?),
+             notes = COALESCE(?, notes),
+             updatedAt = NOW()
+         WHERE requestId = ?`,
+        [userId, userId, notes || null, request.requestId]
+      );
+      await checkStoreReorderLevels(connection, { storeId: request.sourceStoreId });
+      await connection.commit();
+      const dispatchedRequest = await fetchChemistStockRequestById(request.requestId);
+      await notifyChemistUsers(pool, request.chemistId, {
+        notificationType: 'chemist_supply_dispatched',
+        title: `Supply dispatched: ${request.requestNumber}`,
+        message: `Hospital has dispatched your stock request. Please confirm receipt when the drugs arrive.`,
+        priority: 'high',
+        storeId: request.sourceStoreId,
+        referenceType: 'chemist_stock_request',
+        referenceId: request.requestId,
+      }).catch(() => {});
+      return res.json(dispatchedRequest);
+    }
+
+    if (status === 'received') {
+      if (request.status !== 'dispatched') {
+        await connection.rollback();
+        return res.status(400).json({ error: 'Only dispatched requests can be received' });
+      }
+
+      const [freshItems] = await connection.execute(
+        'SELECT * FROM external_chemist_stock_request_items WHERE requestId = ? ORDER BY requestItemId ASC',
+        [request.requestId]
+      );
+
+      for (const line of freshItems) {
+        const qty = Number(line.quantityDispatched) || 0;
+        if (qty <= 0) continue;
+
+        const [medRows] = await connection.execute(
+          'SELECT * FROM medications WHERE medicationId = ?',
+          [line.medicationId]
+        );
+        const medication = medRows[0] || {};
+
+        const [existingDrugRows] = await connection.execute(
+          `SELECT * FROM external_chemist_drug_availability
+           WHERE chemistId = ? AND medicationId = ? AND isActive = 1
+           LIMIT 1 FOR UPDATE`,
+          [request.chemistId, line.medicationId]
+        );
+
+        let chemistDrugId;
+        let quantityBefore = 0;
+        if (existingDrugRows.length) {
+          chemistDrugId = existingDrugRows[0].chemistDrugId;
+          quantityBefore = Number(existingDrugRows[0].quantityAvailable) || 0;
+          const quantityAfter = quantityBefore + qty;
+          await connection.execute(
+            `UPDATE external_chemist_drug_availability
+             SET quantityAvailable = ?,
+                 availabilityStatus = ?,
+                 unitPrice = COALESCE(?, unitPrice),
+                 expiryDate = COALESCE(?, expiryDate),
+                 lastConfirmedAt = NOW(),
+                 updatedAt = NOW()
+             WHERE chemistDrugId = ?`,
+            [
+              quantityAfter,
+              availabilityStatusForQuantity(quantityAfter, existingDrugRows[0].minimumStockLevel),
+              line.sellPrice || line.unitPrice,
+              line.expiryDate,
+              chemistDrugId,
+            ]
+          );
+          await recordStockMovement(connection, {
+            chemistDrugId,
+            chemistId: request.chemistId,
+            movementType: 'supply_dispatch',
+            quantityChange: qty,
+            quantityBefore,
+            quantityAfter,
+            referenceType: 'chemist_stock_request',
+            referenceId: request.requestId,
+            actorUserId: userId,
+            notes: notes || `Received supply ${request.requestNumber}`,
+          });
+        } else {
+          const [insertResult] = await connection.execute(
+            `INSERT INTO external_chemist_drug_availability (
+              chemistId, medicationId, medicationName, genericName, strength, dosageForm,
+              quantityAvailable, availabilityStatus, unitPrice, expiryDate, lastConfirmedAt, notes, isActive
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, 1)`,
+            [
+              request.chemistId,
+              line.medicationId,
+              line.medicationName || medication.name,
+              medication.genericName || null,
+              medication.strength || null,
+              medication.dosageForm || null,
+              qty,
+              availabilityStatusForQuantity(qty, 0),
+              line.sellPrice || line.unitPrice || null,
+              line.expiryDate || null,
+              notes || `Stock from supply ${request.requestNumber}`,
+            ]
+          );
+          chemistDrugId = insertResult.insertId;
+          await recordStockMovement(connection, {
+            chemistDrugId,
+            chemistId: request.chemistId,
+            movementType: 'supply_dispatch',
+            quantityChange: qty,
+            quantityBefore: 0,
+            quantityAfter: qty,
+            referenceType: 'chemist_stock_request',
+            referenceId: request.requestId,
+            actorUserId: userId,
+            notes: notes || `Received supply ${request.requestNumber}`,
+          });
+        }
+
+        await connection.execute(
+          `UPDATE external_chemist_stock_request_items
+           SET quantityReceived = ?, chemistDrugId = ?
+           WHERE requestItemId = ?`,
+          [qty, chemistDrugId, line.requestItemId]
+        );
+      }
+
+      await connection.execute(
+        `UPDATE external_chemist_stock_requests
+         SET status = 'received',
+             receivedBy = ?,
+             receivedAt = NOW(),
+             notes = COALESCE(?, notes),
+             updatedAt = NOW()
+         WHERE requestId = ?`,
+        [userId, notes || null, request.requestId]
+      );
+      await connection.commit();
+      return res.json(await fetchChemistStockRequestById(request.requestId));
+    }
+
+    await connection.rollback();
+    return res.status(400).json({ error: 'Unsupported status transition' });
+  } catch (error) {
+    await connection.rollback();
+    console.error('Error updating chemist stock request status:', error);
+    res.status(error.status || 500).json({ error: 'Failed to update chemist stock request', message: error.message });
+  } finally {
+    connection.release();
   }
 });
 

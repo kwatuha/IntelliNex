@@ -354,6 +354,71 @@ export const pharmacyApi = {
   deleteDrugStore: (id: string) =>
     apiRequest<any>(`/api/pharmacy/drug-stores/${id}`, { method: 'DELETE' }),
 
+  // Stock transfers between stores/branches
+  getStockTransfers: (filters?: { status?: string; fromStoreId?: string; toStoreId?: string; branchId?: string; search?: string; page?: number; limit?: number }) => {
+    const params = new URLSearchParams()
+    if (filters?.status) params.append('status', filters.status)
+    if (filters?.fromStoreId) params.append('fromStoreId', filters.fromStoreId)
+    if (filters?.toStoreId) params.append('toStoreId', filters.toStoreId)
+    if (filters?.branchId) params.append('branchId', filters.branchId)
+    if (filters?.search) params.append('search', filters.search)
+    if (filters?.page) params.append('page', String(filters.page))
+    if (filters?.limit) params.append('limit', String(filters.limit))
+    return apiRequest<any[]>(`/api/pharmacy/stock-transfers?${params.toString()}`)
+  },
+
+  getStockTransfer: (id: string) =>
+    apiRequest<any>(`/api/pharmacy/stock-transfers/${id}`),
+
+  createStockTransfer: (data: any) =>
+    apiRequest<any>('/api/pharmacy/stock-transfers', { method: 'POST', body: data }),
+
+  updateStockTransferStatus: (id: string, data: any) =>
+    apiRequest<any>(`/api/pharmacy/stock-transfers/${id}/status`, { method: 'PATCH', body: data }),
+
+  // External chemist stock supply requests
+  getChemistStockRequests: (filters?: { status?: string; chemistId?: string; sourceStoreId?: string; search?: string; page?: number; limit?: number }) => {
+    const params = new URLSearchParams()
+    if (filters?.status) params.append('status', filters.status)
+    if (filters?.chemistId) params.append('chemistId', filters.chemistId)
+    if (filters?.sourceStoreId) params.append('sourceStoreId', filters.sourceStoreId)
+    if (filters?.search) params.append('search', filters.search)
+    if (filters?.page) params.append('page', String(filters.page))
+    if (filters?.limit) params.append('limit', String(filters.limit))
+    return apiRequest<any[]>(`/api/pharmacy/chemist-stock-requests?${params.toString()}`)
+  },
+
+  getChemistStockRequest: (id: string) =>
+    apiRequest<any>(`/api/pharmacy/chemist-stock-requests/${id}`),
+
+  createChemistStockRequest: (data: any) =>
+    apiRequest<any>('/api/pharmacy/chemist/stock-requests', { method: 'POST', body: data }),
+
+  updateChemistStockRequestStatus: (id: string, data: any) =>
+    apiRequest<any>(`/api/pharmacy/chemist-stock-requests/${id}/status`, { method: 'PATCH', body: data }),
+
+  // Reorder levels
+  getStoreReorderLevels: (storeId: string) =>
+    apiRequest<any[]>(`/api/pharmacy/drug-stores/${storeId}/reorder-levels`),
+
+  createStoreReorderLevel: (storeId: string, data: any) =>
+    apiRequest<any>(`/api/pharmacy/drug-stores/${storeId}/reorder-levels`, { method: 'POST', body: data }),
+
+  updateReorderLevel: (id: string, data: any) =>
+    apiRequest<any>(`/api/pharmacy/reorder-levels/${id}`, { method: 'PUT', body: data }),
+
+  deleteReorderLevel: (id: string) =>
+    apiRequest<any>(`/api/pharmacy/reorder-levels/${id}`, { method: 'DELETE' }),
+
+  getReorderAlerts: (storeId?: string) => {
+    const params = new URLSearchParams()
+    if (storeId) params.append('storeId', storeId)
+    return apiRequest<any[]>(`/api/pharmacy/reorder-alerts?${params.toString()}`)
+  },
+
+  checkReorderAlerts: (data?: { storeId?: number; medicationId?: number }) =>
+    apiRequest<{ alerts: any[]; count: number }>('/api/pharmacy/reorder-alerts/check', { method: 'POST', body: data || {} }),
+
   // Dispensing
   getPaidPrescriptionItemsReadyForDispensing: (patientId?: string) => {
     const params = new URLSearchParams();
@@ -364,8 +429,13 @@ export const pharmacyApi = {
   getPrescriptionItemsReadyForDispensing: (prescriptionId: string) =>
     apiRequest<any[]>(`/api/pharmacy/prescriptions/${prescriptionId}/items/ready-for-dispensing`),
 
-  getAvailableDrugInventory: (medicationId: string) =>
-    apiRequest<any[]>(`/api/pharmacy/drug-inventory/available/${medicationId}`),
+  getAvailableDrugInventory: (medicationId: string, storeId?: string, scope: 'store' | 'branch' = 'branch') => {
+    const params = new URLSearchParams()
+    if (storeId) params.append('storeId', storeId)
+    if (scope) params.append('scope', scope)
+    const query = params.toString()
+    return apiRequest<any[]>(`/api/pharmacy/drug-inventory/available/${medicationId}${query ? `?${query}` : ''}`)
+  },
 
   createDispensation: (data: any) =>
     apiRequest<any>('/api/pharmacy/dispensations', { method: 'POST', body: data }),
@@ -606,6 +676,20 @@ export const notificationApi = {
 
   deleteDrugNotification: (id: string) =>
     apiRequest<any>(`/api/notifications/drug-notifications/${id}`, { method: 'DELETE' }),
+
+  getPharmacyNotifications: (filters?: { status?: string; notificationType?: string; limit?: number }) => {
+    const params = new URLSearchParams()
+    if (filters?.status) params.append('status', filters.status)
+    if (filters?.notificationType) params.append('notificationType', filters.notificationType)
+    if (filters?.limit) params.append('limit', String(filters.limit))
+    return apiRequest<any[]>(`/api/notifications/pharmacy-notifications?${params.toString()}`)
+  },
+
+  acknowledgePharmacyNotification: (id: string) =>
+    apiRequest<any>(`/api/notifications/pharmacy-notifications/${id}/acknowledge`, { method: 'PUT' }),
+
+  resolvePharmacyNotification: (id: string) =>
+    apiRequest<any>(`/api/notifications/pharmacy-notifications/${id}/resolve`, { method: 'PUT' }),
 };
 
 // Laboratory API

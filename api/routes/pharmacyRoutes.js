@@ -6,6 +6,21 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
+const {
+    generateDocumentNumber,
+    findFifoBatchForStore,
+    deductInventoryBatch,
+    receiveInventoryAtStore,
+    buildTransferBatchNumber,
+    buildStoreInventoryFilter,
+    buildBranchStoreInventoryFilter,
+    branchInventoryFilterParams,
+} = require('../lib/drugMovement');
+const {
+    notifyPharmacyStaff,
+    checkStoreReorderLevels,
+    getStoreStockQuantity,
+} = require('../lib/pharmacyNotifications');
 
 /**
  * @route GET /api/pharmacy/medications
@@ -2189,6 +2204,19 @@ router.get('/prescriptions/:prescriptionId/items/ready-for-dispensing', async (r
 router.get('/drug-inventory/available/:medicationId', async (req, res) => {
     try {
         const { medicationId } = req.params;
+        const { storeId, scope = 'branch' } = req.query;
+        const params = [medicationId];
+        let storeFilter = '';
+        if (storeId) {
+            const useBranchScope = scope !== 'store';
+            storeFilter = useBranchScope
+                ? ` AND ${buildBranchStoreInventoryFilter('di', '?')}`
+                : ` AND ${buildStoreInventoryFilter('di', '?')}`;
+            const filterParams = useBranchScope
+                ? branchInventoryFilterParams(storeId)
+                : [storeId, storeId, storeId, storeId];
+            params.push(...filterParams);
+        }
 
         const [rows] = await pool.execute(
             `
@@ -2201,10 +2229,11 @@ router.get('/drug-inventory/available/:medicationId', async (req, res) => {
                 di.sellPrice,
                 di.expiryDate,
                 di.location,
+                di.storeId,
                 di.status,
                 di.createdAt,
                 m.name as medicationName,
-                -- Get the first receipt date for this batch (FIFO ordering)
+                ds.storeName,
                 COALESCE(
                     (SELECT MIN(transactionDate)
                      FROM drug_inventory_transactions
@@ -2214,11 +2243,12 @@ router.get('/drug-inventory/available/:medicationId', async (req, res) => {
                 ) as firstReceiptDate
             FROM drug_inventory di
             INNER JOIN medications m ON di.medicationId = m.medicationId
+            LEFT JOIN drug_stores ds ON di.storeId = ds.storeId
             WHERE di.medicationId = ?
             AND di.quantity > 0
             AND di.status = 'active'
             AND (di.expiryDate IS NULL OR di.expiryDate >= CURDATE())
-            -- FIFO: Order by first receipt date (oldest first), then by expiry date (earliest expiry first)
+            ${storeFilter}
             ORDER BY
                 COALESCE(
                     (SELECT MIN(transactionDate)
@@ -2229,7 +2259,7 @@ router.get('/drug-inventory/available/:medicationId', async (req, res) => {
                 ) ASC,
                 di.expiryDate ASC
             `,
-            [medicationId]
+            params
         );
 
         res.status(200).json(rows);
@@ -3455,6 +3485,14 @@ router.post('/stock-adjustments', async (req, res) => {
 
         await connection.commit();
 
+        const storeIdForCheck = drugInventory.storeId || null;
+        if (storeIdForCheck) {
+            await checkStoreReorderLevels(pool, {
+                storeId: storeIdForCheck,
+                medicationId,
+            }).catch(() => {});
+        }
+
         // Get created adjustment with details
         const [createdAdjustment] = await connection.execute(
             `SELECT
@@ -3942,6 +3980,579 @@ router.delete('/drug-stores/:id', async (req, res) => {
     } catch (error) {
         console.error('Error deleting drug store:', error);
         res.status(500).json({ message: 'Error deleting drug store', error: error.message });
+    }
+});
+
+// ============================================
+// DRUG STORE REORDER LEVELS
+// ============================================
+
+router.get('/drug-stores/:storeId/reorder-levels', async (req, res) => {
+    try {
+        const [rows] = await pool.execute(
+            `SELECT rl.*,
+                    m.name AS medicationName,
+                    m.genericName,
+                    m.strength,
+                    m.dosageForm,
+                    COALESCE((
+                        SELECT SUM(di.quantity)
+                        FROM drug_inventory di
+                        WHERE di.storeId = rl.storeId
+                          AND di.medicationId = rl.medicationId
+                          AND di.status = 'active'
+                          AND di.quantity > 0
+                          AND (di.expiryDate IS NULL OR di.expiryDate >= CURDATE())
+                    ), 0) AS currentQuantity
+             FROM drug_store_reorder_levels rl
+             INNER JOIN medications m ON rl.medicationId = m.medicationId
+             WHERE rl.storeId = ?
+             ORDER BY m.name ASC`,
+            [req.params.storeId]
+        );
+        res.status(200).json(rows);
+    } catch (error) {
+        console.error('Error fetching reorder levels:', error);
+        res.status(500).json({ message: 'Error fetching reorder levels', error: error.message });
+    }
+});
+
+router.post('/drug-stores/:storeId/reorder-levels', async (req, res) => {
+    try {
+        const { medicationId, reorderLevel, reorderQuantity, maxStockLevel, notes } = req.body;
+        if (!medicationId || reorderLevel === undefined) {
+            return res.status(400).json({ error: 'medicationId and reorderLevel are required' });
+        }
+        const [result] = await pool.execute(
+            `INSERT INTO drug_store_reorder_levels
+             (storeId, medicationId, reorderLevel, reorderQuantity, maxStockLevel, notes, isActive)
+             VALUES (?, ?, ?, ?, ?, ?, 1)
+             ON DUPLICATE KEY UPDATE
+               reorderLevel = VALUES(reorderLevel),
+               reorderQuantity = VALUES(reorderQuantity),
+               maxStockLevel = VALUES(maxStockLevel),
+               notes = VALUES(notes),
+               isActive = 1,
+               updatedAt = NOW()`,
+            [
+                req.params.storeId,
+                medicationId,
+                reorderLevel,
+                reorderQuantity || 0,
+                maxStockLevel || null,
+                notes || null,
+            ]
+        );
+        const reorderLevelId = result.insertId || null;
+        let row;
+        if (reorderLevelId) {
+            const [rows] = await pool.execute(
+                'SELECT * FROM drug_store_reorder_levels WHERE reorderLevelId = ?',
+                [reorderLevelId]
+            );
+            row = rows[0];
+        } else {
+            const [rows] = await pool.execute(
+                'SELECT * FROM drug_store_reorder_levels WHERE storeId = ? AND medicationId = ?',
+                [req.params.storeId, medicationId]
+            );
+            row = rows[0];
+        }
+        res.status(201).json(row);
+    } catch (error) {
+        console.error('Error creating reorder level:', error);
+        res.status(500).json({ message: 'Error creating reorder level', error: error.message });
+    }
+});
+
+router.put('/reorder-levels/:id', async (req, res) => {
+    try {
+        const { reorderLevel, reorderQuantity, maxStockLevel, notes, isActive } = req.body;
+        const updates = [];
+        const values = [];
+        if (reorderLevel !== undefined) {
+            updates.push('reorderLevel = ?');
+            values.push(reorderLevel);
+        }
+        if (reorderQuantity !== undefined) {
+            updates.push('reorderQuantity = ?');
+            values.push(reorderQuantity);
+        }
+        if (maxStockLevel !== undefined) {
+            updates.push('maxStockLevel = ?');
+            values.push(maxStockLevel);
+        }
+        if (notes !== undefined) {
+            updates.push('notes = ?');
+            values.push(notes);
+        }
+        if (isActive !== undefined) {
+            updates.push('isActive = ?');
+            values.push(isActive ? 1 : 0);
+        }
+        if (!updates.length) {
+            return res.status(400).json({ error: 'No fields to update' });
+        }
+        values.push(req.params.id);
+        await pool.execute(
+            `UPDATE drug_store_reorder_levels SET ${updates.join(', ')}, updatedAt = NOW() WHERE reorderLevelId = ?`,
+            values
+        );
+        const [rows] = await pool.execute(
+            'SELECT * FROM drug_store_reorder_levels WHERE reorderLevelId = ?',
+            [req.params.id]
+        );
+        if (!rows.length) return res.status(404).json({ message: 'Reorder level not found' });
+        res.status(200).json(rows[0]);
+    } catch (error) {
+        console.error('Error updating reorder level:', error);
+        res.status(500).json({ message: 'Error updating reorder level', error: error.message });
+    }
+});
+
+router.delete('/reorder-levels/:id', async (req, res) => {
+    try {
+        const [result] = await pool.execute(
+            'DELETE FROM drug_store_reorder_levels WHERE reorderLevelId = ?',
+            [req.params.id]
+        );
+        if (!result.affectedRows) return res.status(404).json({ message: 'Reorder level not found' });
+        res.status(200).json({ message: 'Reorder level deleted' });
+    } catch (error) {
+        console.error('Error deleting reorder level:', error);
+        res.status(500).json({ message: 'Error deleting reorder level', error: error.message });
+    }
+});
+
+router.get('/reorder-alerts', async (req, res) => {
+    try {
+        const { storeId } = req.query;
+        const params = [];
+        let storeFilter = '';
+        if (storeId) {
+            storeFilter = ' AND rl.storeId = ?';
+            params.push(storeId);
+        }
+        const [rows] = await pool.execute(
+            `SELECT rl.reorderLevelId, rl.storeId, rl.medicationId, rl.reorderLevel, rl.reorderQuantity,
+                    ds.storeName, b.branchName, m.name AS medicationName,
+                    COALESCE((
+                        SELECT SUM(di.quantity)
+                        FROM drug_inventory di
+                        WHERE di.storeId = rl.storeId
+                          AND di.medicationId = rl.medicationId
+                          AND di.status = 'active'
+                          AND di.quantity > 0
+                          AND (di.expiryDate IS NULL OR di.expiryDate >= CURDATE())
+                    ), 0) AS currentQuantity
+             FROM drug_store_reorder_levels rl
+             INNER JOIN drug_stores ds ON rl.storeId = ds.storeId
+             LEFT JOIN branches b ON ds.branchId = b.branchId
+             INNER JOIN medications m ON rl.medicationId = m.medicationId
+             WHERE rl.isActive = 1 AND ds.isActive = 1
+             ${storeFilter}
+             HAVING currentQuantity <= rl.reorderLevel
+             ORDER BY currentQuantity ASC, m.name ASC`,
+            params
+        );
+        res.status(200).json(rows);
+    } catch (error) {
+        console.error('Error fetching reorder alerts:', error);
+        res.status(500).json({ message: 'Error fetching reorder alerts', error: error.message });
+    }
+});
+
+router.post('/reorder-alerts/check', async (req, res) => {
+    try {
+        const { storeId, medicationId } = req.body || {};
+        const alerts = await checkStoreReorderLevels(pool, { storeId, medicationId });
+        res.status(200).json({ alerts, count: alerts.length });
+    } catch (error) {
+        console.error('Error checking reorder alerts:', error);
+        res.status(500).json({ message: 'Error checking reorder alerts', error: error.message });
+    }
+});
+
+// ============================================
+// DRUG STORE TRANSFERS (Branch / store movement)
+// ============================================
+
+async function fetchStockTransferById(transferId, executor = pool) {
+    const [rows] = await executor.execute(
+        `SELECT t.*,
+                m.name AS medicationName,
+                m.genericName,
+                m.strength,
+                m.dosageForm,
+                fs.storeName AS fromStoreName,
+                fs.storeCode AS fromStoreCode,
+                fb.branchName AS fromBranchName,
+                fb.branchCode AS fromBranchCode,
+                ts.storeName AS toStoreName,
+                ts.storeCode AS toStoreCode,
+                tb.branchName AS toBranchName,
+                tb.branchCode AS toBranchCode,
+                ru.firstName AS requestedByFirstName,
+                ru.lastName AS requestedByLastName,
+                au.firstName AS approvedByFirstName,
+                au.lastName AS approvedByLastName,
+                rcu.firstName AS receivedByFirstName,
+                rcu.lastName AS receivedByLastName
+         FROM drug_inventory_transfers t
+         INNER JOIN medications m ON t.medicationId = m.medicationId
+         INNER JOIN drug_stores fs ON t.fromStoreId = fs.storeId
+         INNER JOIN branches fb ON fs.branchId = fb.branchId
+         INNER JOIN drug_stores ts ON t.toStoreId = ts.storeId
+         INNER JOIN branches tb ON ts.branchId = tb.branchId
+         LEFT JOIN users ru ON t.requestedBy = ru.userId
+         LEFT JOIN users au ON t.approvedBy = au.userId
+         LEFT JOIN users rcu ON t.receivedBy = rcu.userId
+         WHERE t.transferId = ?`,
+        [transferId]
+    );
+    return rows[0] || null;
+}
+
+/**
+ * @route GET /api/pharmacy/stock-transfers
+ * @description List drug transfers between stores/branches
+ */
+router.get('/stock-transfers', async (req, res) => {
+    try {
+        const { status, fromStoreId, toStoreId, branchId, search, page = 1, limit = 50 } = req.query;
+        const offset = (Number(page) - 1) * Number(limit);
+        const params = [];
+        let query = `
+            SELECT t.*,
+                   m.name AS medicationName,
+                   m.genericName,
+                   fs.storeName AS fromStoreName,
+                   ts.storeName AS toStoreName,
+                   fb.branchName AS fromBranchName,
+                   tb.branchName AS toBranchName
+            FROM drug_inventory_transfers t
+            INNER JOIN medications m ON t.medicationId = m.medicationId
+            INNER JOIN drug_stores fs ON t.fromStoreId = fs.storeId
+            INNER JOIN branches fb ON fs.branchId = fb.branchId
+            INNER JOIN drug_stores ts ON t.toStoreId = ts.storeId
+            INNER JOIN branches tb ON ts.branchId = tb.branchId
+            WHERE 1=1
+        `;
+
+        if (status) {
+            query += ' AND t.status = ?';
+            params.push(status);
+        }
+        if (fromStoreId) {
+            query += ' AND t.fromStoreId = ?';
+            params.push(fromStoreId);
+        }
+        if (toStoreId) {
+            query += ' AND t.toStoreId = ?';
+            params.push(toStoreId);
+        }
+        if (branchId) {
+            query += ' AND (fs.branchId = ? OR ts.branchId = ?)';
+            params.push(branchId, branchId);
+        }
+        if (search) {
+            query += ' AND (t.transferNumber LIKE ? OR m.name LIKE ? OR t.batchNumber LIKE ?)';
+            const term = `%${search}%`;
+            params.push(term, term, term);
+        }
+
+        query += ` ORDER BY t.createdAt DESC LIMIT ${Number(limit)} OFFSET ${offset}`;
+        const [rows] = await pool.execute(query, params);
+        res.status(200).json(rows);
+    } catch (error) {
+        console.error('Error fetching stock transfers:', error);
+        res.status(500).json({ message: 'Error fetching stock transfers', error: error.message });
+    }
+});
+
+/**
+ * @route GET /api/pharmacy/stock-transfers/:id
+ * @description Get a single stock transfer
+ */
+router.get('/stock-transfers/:id', async (req, res) => {
+    try {
+        const transfer = await fetchStockTransferById(req.params.id);
+        if (!transfer) return res.status(404).json({ message: 'Stock transfer not found' });
+        res.status(200).json(transfer);
+    } catch (error) {
+        console.error('Error fetching stock transfer:', error);
+        res.status(500).json({ message: 'Error fetching stock transfer', error: error.message });
+    }
+});
+
+/**
+ * @route POST /api/pharmacy/stock-transfers
+ * @description Request a transfer between drug stores
+ */
+router.post('/stock-transfers', async (req, res) => {
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        const {
+            fromStoreId,
+            toStoreId,
+            medicationId,
+            quantity,
+            drugInventoryId,
+            transferDate,
+            notes,
+        } = req.body;
+        const userId = req.user?.id || req.user?.userId || null;
+        const qty = Number(quantity);
+
+        if (!fromStoreId || !toStoreId || !medicationId || !Number.isFinite(qty) || qty <= 0) {
+            await connection.rollback();
+            return res.status(400).json({ error: 'fromStoreId, toStoreId, medicationId, and positive quantity are required' });
+        }
+        if (Number(fromStoreId) === Number(toStoreId)) {
+            await connection.rollback();
+            return res.status(400).json({ error: 'Source and destination stores must be different' });
+        }
+
+        let sourceBatch = null;
+        if (drugInventoryId) {
+            const [rows] = await connection.execute(
+                'SELECT * FROM drug_inventory WHERE drugInventoryId = ? AND storeId = ? AND medicationId = ?',
+                [drugInventoryId, fromStoreId, medicationId]
+            );
+            sourceBatch = rows[0] || null;
+            if (!sourceBatch) {
+                await connection.rollback();
+                return res.status(400).json({ error: 'Selected batch is not available in the source store' });
+            }
+        } else {
+            sourceBatch = await findFifoBatchForStore(connection, medicationId, fromStoreId);
+            if (!sourceBatch) {
+                await connection.rollback();
+                return res.status(400).json({ error: 'No available stock found in the source store for this medication' });
+            }
+        }
+
+        if ((Number(sourceBatch.quantity) || 0) < qty) {
+            await connection.rollback();
+            return res.status(400).json({
+                error: `Insufficient stock in source store. Available: ${sourceBatch.quantity}, requested: ${qty}`,
+            });
+        }
+
+        const transferNumber = await generateDocumentNumber('TRF', 'drug_inventory_transfers', 'transferNumber', connection);
+        const [result] = await connection.execute(
+            `INSERT INTO drug_inventory_transfers
+             (transferNumber, fromStoreId, toStoreId, medicationId, drugInventoryId, batchNumber, quantity, unitPrice,
+              transferDate, status, requestedBy, notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+            [
+                transferNumber,
+                fromStoreId,
+                toStoreId,
+                medicationId,
+                sourceBatch.drugInventoryId,
+                sourceBatch.batchNumber,
+                qty,
+                sourceBatch.unitPrice || null,
+                transferDate || new Date().toISOString().slice(0, 10),
+                userId,
+                notes || null,
+            ]
+        );
+
+        await connection.commit();
+        const transfer = await fetchStockTransferById(result.insertId);
+        await notifyPharmacyStaff(pool, {
+            notificationType: 'store_transfer',
+            title: `Transfer requested: ${transfer.transferNumber}`,
+            message: `${transfer.quantity} units of ${transfer.medicationName} requested from ${transfer.fromStoreName} to ${transfer.toStoreName}.`,
+            priority: 'medium',
+            storeId: transfer.toStoreId,
+            medicationId: transfer.medicationId,
+            referenceType: 'store_transfer',
+            referenceId: transfer.transferId,
+        }).catch(() => {});
+        res.status(201).json(transfer);
+    } catch (error) {
+        await connection.rollback();
+        console.error('Error creating stock transfer:', error);
+        res.status(error.status || 500).json({ message: 'Error creating stock transfer', error: error.message });
+    } finally {
+        connection.release();
+    }
+});
+
+/**
+ * @route PATCH /api/pharmacy/stock-transfers/:id/status
+ * @description Update transfer workflow: dispatch (in_transit) or receive (completed) or cancel
+ */
+router.patch('/stock-transfers/:id/status', async (req, res) => {
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        const { status, notes, drugInventoryId } = req.body || {};
+        const userId = req.user?.id || req.user?.userId || null;
+        const allowedStatuses = ['in_transit', 'completed', 'cancelled'];
+        if (!allowedStatuses.includes(status)) {
+            await connection.rollback();
+            return res.status(400).json({ error: `status must be one of: ${allowedStatuses.join(', ')}` });
+        }
+
+        const [rows] = await connection.execute(
+            'SELECT * FROM drug_inventory_transfers WHERE transferId = ? FOR UPDATE',
+            [req.params.id]
+        );
+        if (!rows.length) {
+            await connection.rollback();
+            return res.status(404).json({ message: 'Stock transfer not found' });
+        }
+        const transfer = rows[0];
+
+        if (status === 'cancelled') {
+            if (transfer.status !== 'pending') {
+                await connection.rollback();
+                return res.status(400).json({ error: 'Only pending transfers can be cancelled' });
+            }
+            await connection.execute(
+                `UPDATE drug_inventory_transfers
+                 SET status = 'cancelled', notes = COALESCE(?, notes), updatedAt = NOW()
+                 WHERE transferId = ?`,
+                [notes || null, transfer.transferId]
+            );
+            await connection.commit();
+            return res.status(200).json(await fetchStockTransferById(transfer.transferId));
+        }
+
+        if (status === 'in_transit') {
+            if (transfer.status !== 'pending') {
+                await connection.rollback();
+                return res.status(400).json({ error: 'Only pending transfers can be dispatched' });
+            }
+
+            let batchId = transfer.drugInventoryId;
+            if (drugInventoryId) {
+                const [batchRows] = await connection.execute(
+                    'SELECT drugInventoryId FROM drug_inventory WHERE drugInventoryId = ? AND storeId = ? AND medicationId = ?',
+                    [drugInventoryId, transfer.fromStoreId, transfer.medicationId]
+                );
+                if (!batchRows.length) {
+                    await connection.rollback();
+                    return res.status(400).json({ error: 'Selected batch is not available in the source store' });
+                }
+                batchId = batchRows[0].drugInventoryId;
+            }
+
+            const deduction = await deductInventoryBatch(connection, {
+                drugInventoryId: batchId,
+                quantity: transfer.quantity,
+                userId,
+                referenceType: 'store_transfer',
+                referenceId: transfer.transferId,
+                referenceNumber: transfer.transferNumber,
+                notes: notes || `Dispatched to store ${transfer.toStoreId}`,
+            });
+
+            await connection.execute(
+                `UPDATE drug_inventory_transfers
+                 SET status = 'in_transit',
+                     drugInventoryId = ?,
+                     approvedBy = ?,
+                     unitPrice = ?,
+                     batchNumber = ?,
+                     notes = COALESCE(?, notes),
+                     updatedAt = NOW()
+                 WHERE transferId = ?`,
+                [
+                    batchId,
+                    userId,
+                    deduction.batch.unitPrice || transfer.unitPrice,
+                    deduction.batch.batchNumber,
+                    notes || null,
+                    transfer.transferId,
+                ]
+            );
+            await checkStoreReorderLevels(connection, {
+                storeId: transfer.fromStoreId,
+                medicationId: transfer.medicationId,
+            });
+            await connection.commit();
+            return res.status(200).json(await fetchStockTransferById(transfer.transferId));
+        }
+
+        if (status === 'completed') {
+            if (transfer.status !== 'in_transit') {
+                await connection.rollback();
+                return res.status(400).json({ error: 'Only in-transit transfers can be received' });
+            }
+
+            const [sourceBatchRows] = await connection.execute(
+                'SELECT * FROM drug_inventory WHERE drugInventoryId = ?',
+                [transfer.drugInventoryId]
+            );
+            const sourceBatch = sourceBatchRows[0] || {};
+            const [toStoreRows] = await connection.execute(
+                'SELECT branchId FROM drug_stores WHERE storeId = ?',
+                [transfer.toStoreId]
+            );
+            const destinationBatchNumber = buildTransferBatchNumber(
+                transfer.batchNumber || sourceBatch.batchNumber,
+                transfer.transferNumber
+            );
+
+            const receipt = await receiveInventoryAtStore(connection, {
+                medicationId: transfer.medicationId,
+                batchNumber: destinationBatchNumber,
+                quantity: transfer.quantity,
+                unitPrice: transfer.unitPrice || sourceBatch.unitPrice,
+                sellPrice: sourceBatch.sellPrice || transfer.unitPrice,
+                minPrice: sourceBatch.minPrice,
+                manufactureDate: sourceBatch.manufactureDate,
+                expiryDate: sourceBatch.expiryDate,
+                toStoreId: transfer.toStoreId,
+                toBranchId: toStoreRows[0]?.branchId || null,
+                userId,
+                referenceType: 'store_transfer',
+                referenceId: transfer.transferId,
+                referenceNumber: transfer.transferNumber,
+                notes: notes || `Received from store ${transfer.fromStoreId}`,
+                sourceBatchNumber: transfer.batchNumber || sourceBatch.batchNumber,
+            });
+
+            const now = new Date();
+            await connection.execute(
+                `UPDATE drug_inventory_transfers
+                 SET status = 'completed',
+                     receivedBy = ?,
+                     receivedDate = ?,
+                     receivedTime = ?,
+                     batchNumber = ?,
+                     notes = COALESCE(?, notes),
+                     updatedAt = NOW()
+                 WHERE transferId = ?`,
+                [
+                    userId,
+                    now.toISOString().slice(0, 10),
+                    now.toTimeString().slice(0, 8),
+                    receipt.batchNumber,
+                    notes || null,
+                    transfer.transferId,
+                ]
+            );
+            await connection.commit();
+            return res.status(200).json(await fetchStockTransferById(transfer.transferId));
+        }
+
+        await connection.rollback();
+        return res.status(400).json({ error: 'Unsupported status transition' });
+    } catch (error) {
+        await connection.rollback();
+        console.error('Error updating stock transfer status:', error);
+        res.status(error.status || 500).json({ message: 'Error updating stock transfer status', error: error.message });
+    } finally {
+        connection.release();
     }
 });
 

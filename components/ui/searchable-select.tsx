@@ -26,6 +26,7 @@ interface SearchableSelectProps {
   options: SearchableSelectOption[]
   placeholder?: string
   disabled?: boolean
+  modal?: boolean
   triggerClassName?: string
   contentClassName?: string
   emptyMessage?: string
@@ -37,6 +38,7 @@ export function SearchableSelect({
   options,
   placeholder = "Select...",
   disabled = false,
+  modal = false,
   triggerClassName,
   contentClassName,
   emptyMessage = "No option found.",
@@ -46,7 +48,7 @@ export function SearchableSelect({
   const selected = options.find((o) => o.value === value)
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={setOpen} modal={modal}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"

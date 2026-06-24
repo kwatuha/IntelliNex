@@ -64,6 +64,8 @@ import { HospitalLogoImage } from "./hospital-logo-image"
 import { memo } from "react"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
+import { useChemistScope } from "@/lib/hooks/use-chemist-scope"
+import { Loader2 } from "lucide-react"
 
 interface AppSidebarProps {
   activeCategory: string
@@ -105,6 +107,7 @@ export const AppSidebar = memo(function AppSidebar({ activeCategory }: AppSideba
   const pathname = usePathname()
   const { user } = useAuth()
   const { menuAccess, loading: menuLoading } = useRoleMenuAccess(user?.id)
+  const { displayName: chemistDisplayName, loading: chemistLoading, isChemistUser } = useChemistScope()
 
   // Get the current category
   const currentCategory = navigationCategories.find(cat => cat.id === activeCategory) || navigationCategories[0]
@@ -155,8 +158,23 @@ export const AppSidebar = memo(function AppSidebar({ activeCategory }: AppSideba
   return (
     <Sidebar style={{ backgroundColor: "#0f4c75" }} className="text-white">
       <SidebarHeader className="flex shrink-0 items-center justify-center border-b border-white/10 px-3 py-5">
-        <Link href="/" className="flex w-full flex-col items-center justify-center">
-          <HospitalLogoImage variant="sidebar" className="w-full max-w-[min(100%,15rem)]" />
+        <Link href="/" className="flex w-full flex-col items-center justify-center text-center">
+          {isChemistUser ? (
+            chemistLoading ? (
+              <Loader2 className="h-6 w-6 animate-spin text-white/80" />
+            ) : chemistDisplayName ? (
+              <div className="space-y-1">
+                <div className="text-lg font-extrabold leading-tight text-white [text-shadow:0_2px_8px_rgba(0,0,0,0.45)]">
+                  {chemistDisplayName}
+                </div>
+                <div className="text-xs font-medium text-white/80">External chemist portal</div>
+              </div>
+            ) : (
+              <HospitalLogoImage variant="sidebar" className="w-full max-w-[min(100%,15rem)]" />
+            )
+          ) : (
+            <HospitalLogoImage variant="sidebar" className="w-full max-w-[min(100%,15rem)]" />
+          )}
         </Link>
       </SidebarHeader>
       <SidebarContent className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">

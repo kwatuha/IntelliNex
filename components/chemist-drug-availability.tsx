@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Download, FileSpreadsheet, History, Loader2, PackageCheck, Pill, Plus, Search, Trash2, Upload } from "lucide-react"
 import { pharmacyApi } from "@/lib/api"
 import { useAuth } from "@/lib/auth/auth-context"
+import { ChemistPortalNav } from "@/components/chemist-portal-nav"
 
 type ChemistDrug = {
   chemistDrugId: number
@@ -462,6 +463,7 @@ export function ChemistDrugAvailability() {
 
   return (
     <div className="space-y-4">
+      <ChemistPortalNav />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Drug Availability</h1>

@@ -47,6 +47,8 @@ services:
       DB_PORT: 3306
       PORT: 3001
       APP_NAME: IntelliNex
+      # Override production CORS/base URL from root `.env` for local Docker dev
+      FRONTEND_URL: http://localhost:3100
     command: sh -c "if [ ! -d node_modules ] || [ -z \"$(ls -A node_modules)\" ]; then npm install; fi && npx nodemon app.js"
 
   # Next.js 15 Frontend (Optimized with existing Dockerfile)
@@ -64,6 +66,8 @@ services:
       - frontend_next:/app/.next
     environment:
       NODE_ENV: development
+      # Override production URLs from root `.env` for local Docker dev
+      NEXT_PUBLIC_BASE_URL: http://localhost:3100/hmis
       NEXT_PUBLIC_API_URL: http://localhost:3101
       NEXT_PUBLIC_PRODUCT_NAME: IntelliNex
       # Set this to "Kiplombe" for the specific Kiplombe deployment/app branding

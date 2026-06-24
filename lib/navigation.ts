@@ -35,6 +35,7 @@ import {
   Store,
   Ambulance,
   Video,
+  Truck,
 } from "lucide-react"
 
 export interface NavigationItem {
@@ -161,6 +162,13 @@ export const navigationCategories: NavigationCategory[] = [
         icon: Package,
         href: "/chemist/drugs",
         description: "External chemist medicine availability and stock status",
+        group: "Outpatient & diagnostics",
+      },
+      {
+        title: "Stock Requests",
+        icon: Truck,
+        href: "/chemist/stock-requests",
+        description: "Request drugs from the hospital main store",
         group: "Outpatient & diagnostics",
       },
       {

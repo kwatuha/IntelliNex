@@ -1,8 +1,9 @@
 "use client"
 
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
 import type { UserRole } from "./permissions"
 import { AuthService, type Branch, type User } from "./auth-service"
+import { invalidateRoleMenuAccessCache } from "@/lib/hooks/use-role-menu-access"
 
 interface AuthContextType {
   user: User | null
@@ -17,6 +18,27 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+
+const LOGIN_TIMEOUT_MS = 8000
+const VERIFY_TIMEOUT_MS = 2500
+
+function normalizePrivileges(raw: unknown): Array<{ privilegeName: string; module?: string }> {
+  if (!Array.isArray(raw)) return []
+  return raw.map((priv: any) => {
+    if (typeof priv === "string") return { privilegeName: priv }
+    return { privilegeName: priv.privilegeName || priv, module: priv.module }
+  })
+}
+
+function decodeJwtPayload(token: string): any | null {
+  try {
+    const parts = token.split(".")
+    if (parts.length !== 3) return null
+    return JSON.parse(atob(parts[1]))
+  } catch {
+    return null
+  }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -40,53 +62,84 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const applyBranchContext = (rawUser: any) => {
     const branches = Array.isArray(rawUser?.branches)
-      ? rawUser.branches.map(normalizeBranch).filter(Boolean) as Branch[]
+      ? (rawUser.branches.map(normalizeBranch).filter(Boolean) as Branch[])
       : []
     const defaultBranch = normalizeBranch(rawUser?.defaultBranch || rawUser?.currentBranch) || branches[0] || null
-    const storedBranchId = typeof window !== 'undefined' ? localStorage.getItem('current_branch_id') : null
+    const storedBranchId = typeof window !== "undefined" ? localStorage.getItem("current_branch_id") : null
     const selectedBranch =
-      branches.find((branch) => String(branch.branchId) === storedBranchId) ||
-      defaultBranch ||
-      null
+      branches.find((branch) => String(branch.branchId) === storedBranchId) || defaultBranch || null
 
     setAccessibleBranches(branches)
     setCurrentBranchState(selectedBranch)
-    if (selectedBranch && typeof window !== 'undefined') {
-      localStorage.setItem('current_branch_id', String(selectedBranch.branchId))
+    if (selectedBranch && typeof window !== "undefined") {
+      localStorage.setItem("current_branch_id", String(selectedBranch.branchId))
     }
 
     return { branches, defaultBranch, currentBranch: selectedBranch }
+  }
+
+  const hydrateUserFromApi = (apiUser: any) => {
+    const branchContext = applyBranchContext(apiUser)
+    const privileges = normalizePrivileges(apiUser.privileges)
+    setUser({
+      id: apiUser.id?.toString() || apiUser.userId?.toString() || "",
+      username: apiUser.username,
+      role: apiUser.role?.toLowerCase() || apiUser.roleName?.toLowerCase() || "registration",
+      name: `${apiUser.firstName || ""} ${apiUser.lastName || ""}`.trim(),
+      email: apiUser.email,
+      department: apiUser.department || "",
+      privileges,
+      dashboardCards: apiUser.dashboardCards || null,
+      landingConfig: apiUser.landingConfig || null,
+      branches: branchContext.branches,
+      defaultBranch: branchContext.defaultBranch,
+      currentBranch: branchContext.currentBranch,
+      canAccessAllBranches: Boolean(apiUser.canAccessAllBranches),
+    })
+    setIsAuthenticated(true)
+  }
+
+  const hydrateUserFromJwt = (token: string): boolean => {
+    const payload = decodeJwtPayload(token)
+    if (!payload?.user || !payload.exp || payload.exp * 1000 <= Date.now()) return false
+    hydrateUserFromApi({
+      ...payload.user,
+      role: payload.user.roleName || payload.user.role,
+    })
+    return true
+  }
+
+  const clearAuthStorage = () => {
+    localStorage.removeItem("token")
+    localStorage.removeItem("jwt_token")
+    localStorage.removeItem("auth_token")
   }
 
   const setCurrentBranch = (branchId: number | string) => {
     const branch = accessibleBranches.find((item) => String(item.branchId) === String(branchId))
     if (!branch) return
     setCurrentBranchState(branch)
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('current_branch_id', String(branch.branchId))
+    if (typeof window !== "undefined") {
+      localStorage.setItem("current_branch_id", String(branch.branchId))
     }
   }
 
   // Check for existing authentication on mount
   useEffect(() => {
-    // Safety timeout: always set loading to false after 10 seconds max
     const safetyTimeout = setTimeout(() => {
-      console.warn('Auth check timeout - forcing loading to false')
+      console.warn("Auth check timeout - forcing loading to false")
       setIsLoading(false)
     }, 10000)
 
     const checkAuth = async () => {
-      // Always set loading to false on server-side
-      if (typeof window === 'undefined') {
+      if (typeof window === "undefined") {
         clearTimeout(safetyTimeout)
         setIsLoading(false)
         return
       }
 
-      // Check for JWT token in localStorage (check all possible token keys)
-      const token = localStorage.getItem('token') || localStorage.getItem('jwt_token') || localStorage.getItem('auth_token')
+      const token = localStorage.getItem("token") || localStorage.getItem("jwt_token") || localStorage.getItem("auth_token")
 
-      // If no token, immediately set loading to false (no async operations needed)
       if (!token) {
         clearTimeout(safetyTimeout)
         setIsLoading(false)
@@ -96,150 +149,76 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return
       }
 
-      // Verify token with backend (with timeout)
-      // Use relative URL when NEXT_PUBLIC_API_URL is empty (works through nginx)
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || ''
-      const verifyUrl = apiUrl ? `${apiUrl}/api/auth/verify` : '/api/auth/verify'
+      // Instant paint from JWT (login already returned full payload). Verify refreshes in background.
+      const hydratedFromJwt = hydrateUserFromJwt(token)
+      if (hydratedFromJwt) {
+        clearTimeout(safetyTimeout)
+        setIsLoading(false)
+      }
+
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || ""
+      const verifyUrl = apiUrl ? `${apiUrl}/api/auth/verify` : "/api/auth/verify"
 
       try {
         const controller = new AbortController()
-        const timeoutId = setTimeout(() => {
-          controller.abort()
-        }, 5000) // 5 second timeout
+        const timeoutId = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS)
 
         let response: Response | null = null
         try {
           response = await fetch(verifyUrl, {
-            method: 'GET',
+            method: "GET",
             headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
             },
             signal: controller.signal,
-            // Add credentials for CORS
-            credentials: 'include',
+            credentials: "include",
           })
           clearTimeout(timeoutId)
         } catch (fetchError: any) {
           clearTimeout(timeoutId)
-          // If fetch fails (network error, timeout, CORS, etc.), try JWT decode fallback
-          console.warn('API verify failed, using JWT decode fallback:', fetchError.message)
-          throw new Error('Network error or timeout')
+          if (hydratedFromJwt) return
+          console.warn("API verify failed, using JWT decode fallback:", fetchError.message)
+          throw new Error("Network error or timeout")
         }
 
         if (response && response.ok) {
           const data = await response.json()
           if (data.user) {
-            const branchContext = applyBranchContext(data.user)
-            // Normalize privileges - handle both array of strings and array of objects
-            let privileges: Array<{ privilegeName: string; module?: string }> = []
-            if (data.user.privileges) {
-              if (Array.isArray(data.user.privileges)) {
-                privileges = data.user.privileges.map((priv: any) => {
-                  if (typeof priv === 'string') {
-                    return { privilegeName: priv }
-                  }
-                  return { privilegeName: priv.privilegeName || priv, module: priv.module }
-                })
-              }
-            }
-            
-            setUser({
-              id: data.user.id?.toString() || data.user.userId?.toString() || '',
-              username: data.user.username,
-              role: data.user.role?.toLowerCase() || 'registration',
-              name: `${data.user.firstName || ''} ${data.user.lastName || ''}`.trim(),
-              email: data.user.email,
-              department: data.user.department || '',
-              privileges: privileges,
-              dashboardCards: data.user.dashboardCards || null,
-              landingConfig: data.user.landingConfig || null,
-              branches: branchContext.branches,
-              defaultBranch: branchContext.defaultBranch,
-              currentBranch: branchContext.currentBranch,
-              canAccessAllBranches: Boolean(data.user.canAccessAllBranches),
-            })
-            setIsAuthenticated(true)
-            setIsLoading(false)
-            return
-          } else {
-            // No user data in response, token invalid
-            localStorage.removeItem('token')
-            localStorage.removeItem('jwt_token')
-            localStorage.removeItem('auth_token')
-            setIsAuthenticated(false)
+            hydrateUserFromApi(data.user)
             setIsLoading(false)
             return
           }
-        } else if (response) {
-          // Token invalid (non-200 response)
-          localStorage.removeItem('token')
-          localStorage.removeItem('jwt_token')
-          localStorage.removeItem('auth_token')
+          clearAuthStorage()
           setIsAuthenticated(false)
           setIsLoading(false)
           return
         }
-      } catch (error: any) {
-        // If verify endpoint fails (network error, timeout, etc.), try to decode JWT token as fallback
+
+        if (response) {
+          // Only clear if JWT hydrate also failed (expired / invalid)
+          if (!hydratedFromJwt) {
+            clearAuthStorage()
+            setIsAuthenticated(false)
+          }
+          setIsLoading(false)
+          return
+        }
+      } catch {
+        if (hydratedFromJwt) return
         try {
-          // Simple JWT decode (without verification for now)
-          const parts = token.split('.')
-          if (parts.length === 3) {
-            const payload = JSON.parse(atob(parts[1]))
-            if (payload.user && payload.exp && payload.exp * 1000 > Date.now()) {
-              const branchContext = applyBranchContext(payload.user)
-              // Token not expired, use stored user data
-              // Normalize privileges from JWT payload
-              let privileges: Array<{ privilegeName: string; module?: string }> = []
-              if (payload.user.privileges) {
-                if (Array.isArray(payload.user.privileges)) {
-                  privileges = payload.user.privileges.map((priv: any) => {
-                    if (typeof priv === 'string') {
-                      return { privilegeName: priv }
-                    }
-                    return { privilegeName: priv.privilegeName || priv, module: priv.module }
-                  })
-                }
-              }
-              
-              setUser({
-                id:
-                  payload.user.id?.toString() ||
-                  payload.user.userId?.toString() ||
-                  '',
-                username: payload.user.username,
-                role: payload.user.roleName?.toLowerCase() || payload.user.role?.toLowerCase() || 'registration',
-                name: `${payload.user.firstName || ''} ${payload.user.lastName || ''}`.trim(),
-                email: payload.user.email,
-                department: payload.user.department || '',
-                privileges: privileges,
-                dashboardCards: payload.user.dashboardCards || null,
-                landingConfig: payload.user.landingConfig || null,
-                branches: branchContext.branches,
-                defaultBranch: branchContext.defaultBranch,
-                currentBranch: branchContext.currentBranch,
-                canAccessAllBranches: Boolean(payload.user.canAccessAllBranches),
-              })
-              setIsAuthenticated(true)
-              setIsLoading(false)
-              return
-            }
+          if (hydrateUserFromJwt(token)) {
+            setIsLoading(false)
+            return
           }
         } catch (decodeError) {
-          // Token decode failed, clear it
-          console.warn('Token decode failed:', decodeError)
+          console.warn("Token decode failed:", decodeError)
         }
-
-        // If all verification methods fail, clear token and set unauthenticated
-        localStorage.removeItem('token')
-        localStorage.removeItem('jwt_token')
-        localStorage.removeItem('auth_token')
+        clearAuthStorage()
         setIsAuthenticated(false)
         setAccessibleBranches([])
         setCurrentBranchState(null)
       } finally {
-        // Always ensure loading is set to false
         clearTimeout(safetyTimeout)
         setIsLoading(false)
       }
@@ -247,135 +226,114 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     checkAuth()
 
-    // Cleanup safety timeout on unmount
     return () => {
       clearTimeout(safetyTimeout)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only auth bootstrap
   }, [])
 
   const login = async (username: string, password: string) => {
     try {
       setIsLoading(true)
 
-      // Try backend API login first
       try {
-        // Use relative URL in browser, or public URL if set
-        const apiUrl = typeof window !== 'undefined'
-          ? (process.env.NEXT_PUBLIC_API_URL || '')
-          : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001');
-        const response = await fetch(`${apiUrl}/api/auth/login`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ username, password }),
-        })
+        const apiUrl =
+          typeof window !== "undefined"
+            ? process.env.NEXT_PUBLIC_API_URL || ""
+            : process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001"
+
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), LOGIN_TIMEOUT_MS)
+
+        let response: Response
+        try {
+          response = await fetch(`${apiUrl}/api/auth/login`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ username, password }),
+            signal: controller.signal,
+          })
+        } finally {
+          clearTimeout(timeoutId)
+        }
 
         if (response.ok) {
           const data = await response.json()
-          // Store the JWT token from backend
           if (data.token) {
-            localStorage.setItem('token', data.token)
-            localStorage.setItem('jwt_token', data.token)
-            // Also store user data
+            localStorage.setItem("token", data.token)
+            localStorage.setItem("jwt_token", data.token)
             if (data.user) {
-            const branchContext = applyBranchContext(data.user)
-            // Normalize privileges - handle both array of strings and array of objects
-            let privileges: Array<{ privilegeName: string; module?: string }> = []
-            if (data.user.privileges) {
-              if (Array.isArray(data.user.privileges)) {
-                privileges = data.user.privileges.map((priv: any) => {
-                  if (typeof priv === 'string') {
-                    return { privilegeName: priv }
-                  }
-                  return { privilegeName: priv.privilegeName || priv, module: priv.module }
-                })
-              }
-            }
-            
-            setUser({
-              id: data.user.id.toString(),
-              username: data.user.username,
-              role: data.user.role?.toLowerCase() || 'registration',
-              name: `${data.user.firstName || ''} ${data.user.lastName || ''}`.trim(),
-              email: data.user.email,
-              department: data.user.department || '',
-              privileges: privileges,
-              dashboardCards: data.user.dashboardCards || null,
-              landingConfig: data.user.landingConfig || null,
-              branches: branchContext.branches,
-              defaultBranch: branchContext.defaultBranch,
-              currentBranch: branchContext.currentBranch,
-              canAccessAllBranches: Boolean(data.user.canAccessAllBranches),
-            })
-              setIsAuthenticated(true)
+              hydrateUserFromApi(data.user)
               return { success: true }
             }
           }
         } else {
           const errorData = await response.json().catch(() => ({}))
-          return { success: false, error: errorData.error || 'Invalid username or password' }
+          return { success: false, error: errorData.error || "Invalid username or password" }
         }
-      } catch (apiError) {
-        const configuredApi = Boolean(
-          (process.env.NEXT_PUBLIC_API_URL || '').trim(),
-        )
-        const isProdBuild = process.env.NODE_ENV === 'production'
-        // Production builds with a configured API must not fall back to mock users — that
-        // shows "wrong password" when the real failure is mixed content, CORS, or network.
+      } catch (apiError: any) {
+        const configuredApi = Boolean((process.env.NEXT_PUBLIC_API_URL || "").trim())
+        const isProdBuild = process.env.NODE_ENV === "production"
+        if (apiError?.name === "AbortError") {
+          return { success: false, error: "Login timed out. Check network or API availability and try again." }
+        }
         if (isProdBuild && configuredApi) {
-          console.error('HMIS API login request failed:', apiError)
+          console.error("HMIS API login request failed:", apiError)
           return {
             success: false,
             error:
-              'Cannot reach the HMIS API from this page. Check that NEXT_PUBLIC_API_URL matches where the API is reachable (e.g. http://YOUR_IP:3001 when using published ports). If the page is HTTPS but NEXT_PUBLIC_API_URL is http://, the browser blocks the request — use HTTPS for the API or same-origin proxy.',
+              "Cannot reach the HMIS API from this page. Check that NEXT_PUBLIC_API_URL matches where the API is reachable (e.g. http://YOUR_IP:3001 when using published ports). If the page is HTTPS but NEXT_PUBLIC_API_URL is http://, the browser blocks the request — use HTTPS for the API or same-origin proxy.",
           }
         }
-        console.warn('Backend login failed, using mock auth:', apiError)
-        const user = await AuthService.login({ username, password })
+        console.warn("Backend login failed, using mock auth:", apiError)
+        const mockUser = await AuthService.login({ username, password })
 
-        if (user) {
-          const token = AuthService.generateToken(user)
-          localStorage.setItem('auth_token', token)
-          setUser(user)
+        if (mockUser) {
+          const token = AuthService.generateToken(mockUser)
+          localStorage.setItem("auth_token", token)
+          setUser(mockUser)
           setIsAuthenticated(true)
           return { success: true }
-        } else {
-          return { success: false, error: 'Invalid username or password' }
         }
+        return { success: false, error: "Invalid username or password" }
       }
 
-      return { success: false, error: 'Login failed. Please try again.' }
-    } catch (error) {
-      return { success: false, error: 'Login failed. Please try again.' }
+      return { success: false, error: "Login failed. Please try again." }
+    } catch {
+      return { success: false, error: "Login failed. Please try again." }
     } finally {
       setIsLoading(false)
     }
   }
 
-  const logout = () => {
-    localStorage.removeItem('auth_token')
-    localStorage.removeItem('token')
-    localStorage.removeItem('jwt_token')
-    localStorage.removeItem('current_branch_id')
+  const logout = useCallback(() => {
+    invalidateRoleMenuAccessCache()
+    localStorage.removeItem("auth_token")
+    localStorage.removeItem("token")
+    localStorage.removeItem("jwt_token")
+    localStorage.removeItem("current_branch_id")
     setUser(null)
     setAccessibleBranches([])
     setCurrentBranchState(null)
     setIsAuthenticated(false)
-  }
+  }, [])
 
   return (
-    <AuthContext.Provider value={{
-      user,
-      userRole,
-      isAuthenticated,
-      isLoading,
-      currentBranch,
-      accessibleBranches,
-      setCurrentBranch,
-      login,
-      logout
-    }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        userRole,
+        isAuthenticated,
+        isLoading,
+        currentBranch,
+        accessibleBranches,
+        setCurrentBranch,
+        login,
+        logout,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   )

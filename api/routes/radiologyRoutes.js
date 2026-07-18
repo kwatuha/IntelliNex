@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
+const { notifyRadiologyReportReady } = require('../lib/patientSms');
 
 /**
  * @route GET /api/radiology/exam-types
@@ -866,6 +867,13 @@ router.post('/orders/:orderId/complete-report', async (req, res) => {
         );
 
         await connection.commit();
+
+        if (out[0]?.patientId) {
+            notifyRadiologyReportReady(out[0].patientId, {
+                orderNumber: out[0].orderNumber,
+            });
+        }
+
         res.status(200).json({ order: out[0], examId, message: 'Report saved' });
     } catch (error) {
         await connection.rollback();

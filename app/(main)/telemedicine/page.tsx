@@ -10,23 +10,43 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { telemedicineApi } from "@/lib/api"
 import { getTelemedicineProviderLabel } from "@/lib/telemedicine-providers"
 import { useToast } from "@/hooks/use-toast"
-import { ChevronLeft, ChevronRight, LayoutList, Loader2, RefreshCw, Settings, Video } from "lucide-react"
+import { BarChart3, ChevronLeft, ChevronRight, LayoutList, Loader2, RefreshCw, Settings, Video } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   TelemedicineFacilityActiveVisits,
   type TelemedicineFacilityActiveVisitsHandle,
 } from "@/components/telemedicine-facility-active-visits"
 import { TelemedicineMeetingLinkActions } from "@/components/telemedicine-meeting-link-actions"
+import { TelemedicineMetrics } from "@/components/telemedicine-metrics"
 
 const PAGE_SIZE = 25
+/** Waiting = telemedicine queue + sessions not yet started. */
+type SessionCategory = "waiting" | "in_progress" | "ended" | "all"
+
+function humanizeStatus(status: string | undefined) {
+  if (!status) return "—"
+  const labels: Record<string, string> = {
+    waiting: "Waiting",
+    called: "Called",
+    serving: "In progress",
+    created: "Waiting (session)",
+    waiting_for_consent: "Waiting for consent",
+    in_progress: "In progress",
+    recording_started: "In progress",
+    ended: "Ended",
+  }
+  return labels[status] || status.replace(/_/g, " ")
+}
 
 export default function TelemedicineHubPage() {
   const { toast } = useToast()
-  const [tab, setTab] = useState<"current" | "all">("current")
+  const [tab, setTab] = useState<"current" | "all" | "analytics">("current")
   const [page, setPage] = useState(1)
   const [allSessionsLoading, setAllSessionsLoading] = useState(false)
   const [sessions, setSessions] = useState<any[]>([])
+  const [queueEntries, setQueueEntries] = useState<any[]>([])
   const [total, setTotal] = useState(0)
+  const [sessionCategory, setSessionCategory] = useState<SessionCategory>("waiting")
   /** Bumped when an active visit ends so “All sessions” refetches. */
   const [allSessionsVersion, setAllSessionsVersion] = useState(0)
   const activeVisitsRef = useRef<TelemedicineFacilityActiveVisitsHandle | null>(null)
@@ -42,13 +62,31 @@ export default function TelemedicineHubPage() {
     ;(async () => {
       try {
         setAllSessionsLoading(true)
+        if (sessionCategory === "waiting") {
+          const [queueRows, pendingRes] = await Promise.all([
+            telemedicineApi.listQueue(),
+            telemedicineApi.listSessions({
+              page: 1,
+              limit: PAGE_SIZE,
+              scope: "facility",
+              statusGroup: "pending",
+            }),
+          ])
+          if (cancelled) return
+          setQueueEntries(queueRows || [])
+          setSessions(pendingRes.sessions || [])
+          setTotal((queueRows?.length || 0) + (pendingRes.total ?? 0))
+          return
+        }
         const res = await telemedicineApi.listSessions({
           page,
           limit: PAGE_SIZE,
           scope: "facility",
+          statusGroup: sessionCategory === "all" ? undefined : sessionCategory,
         })
         if (cancelled) return
         setSessions(res.sessions || [])
+        setQueueEntries([])
         setTotal(res.total ?? 0)
       } catch (err: any) {
         if (!cancelled) {
@@ -66,7 +104,7 @@ export default function TelemedicineHubPage() {
     return () => {
       cancelled = true
     }
-  }, [tab, page, toast, allSessionsVersion])
+  }, [tab, page, toast, allSessionsVersion, sessionCategory])
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -102,7 +140,7 @@ export default function TelemedicineHubPage() {
         <Tabs
           value={tab}
           onValueChange={(v) => {
-            const next = v as "current" | "all"
+            const next = v as "current" | "all" | "analytics"
             setTab(next)
             if (next === "all") setPage(1)
           }}
@@ -111,14 +149,18 @@ export default function TelemedicineHubPage() {
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">Facility telemedicine</CardTitle>
             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-stretch sm:justify-between sm:gap-3">
-              <TabsList className="grid h-auto w-full max-w-2xl flex-1 grid-cols-2 gap-1 p-1 sm:min-w-0">
+              <TabsList className="grid h-auto w-full max-w-2xl flex-1 grid-cols-3 gap-1 p-1 sm:min-w-0">
                 <TabsTrigger value="current" className="gap-2 py-2.5">
                   <Video className="h-4 w-4 shrink-0" />
                   Current visits
                 </TabsTrigger>
                 <TabsTrigger value="all" className="gap-2 py-2.5">
                   <LayoutList className="h-4 w-4 shrink-0" />
-                  All sessions
+                  Session board
+                </TabsTrigger>
+                <TabsTrigger value="analytics" className="gap-2 py-2.5">
+                  <BarChart3 className="h-4 w-4 shrink-0" />
+                  Metrics
                 </TabsTrigger>
               </TabsList>
               {tab === "current" ? (
@@ -150,13 +192,172 @@ export default function TelemedicineHubPage() {
             </TabsContent>
 
             <TabsContent value="all" className="mt-0 outline-none focus-visible:ring-0 space-y-3">
+              <div className="flex flex-wrap gap-2 border-b pb-3">
+                {([
+                  ["waiting", "Waiting"],
+                  ["in_progress", "In progress"],
+                  ["ended", "Ended"],
+                  ["all", "All"],
+                ] as Array<[SessionCategory, string]>).map(([value, label]) => (
+                  <Button
+                    key={value}
+                    type="button"
+                    size="sm"
+                    variant={sessionCategory === value ? "default" : "outline"}
+                    onClick={() => {
+                      setSessionCategory(value)
+                      setPage(1)
+                    }}
+                  >
+                    {label}
+                  </Button>
+                ))}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="ml-auto"
+                  disabled={allSessionsLoading}
+                  onClick={() => setAllSessionsVersion((n) => n + 1)}
+                >
+                  <RefreshCw className={cn("mr-2 h-4 w-4", allSessionsLoading && "animate-spin")} />
+                  Refresh
+                </Button>
+              </div>
               {allSessionsLoading ? (
                 <div className="flex justify-center py-12 text-muted-foreground">
                   <Loader2 className="h-8 w-8 animate-spin" />
                 </div>
+              ) : sessionCategory === "waiting" ? (
+                queueEntries.length === 0 && sessions.length === 0 ? (
+                  <p className="py-8 text-center text-sm text-muted-foreground">
+                    No patients waiting for telemedicine. Add someone to the telemedicine queue or start a session from{" "}
+                    <Link href="/telemedicine/create" className="underline">
+                      Telemedicine sessions
+                    </Link>
+                    .
+                  </p>
+                ) : (
+                  <div className="space-y-4">
+                    {queueEntries.length > 0 ? (
+                      <div className="rounded-md border overflow-x-auto bg-background/50">
+                        <div className="border-b px-3 py-2 text-sm font-medium">In telemedicine queue</div>
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Ticket</TableHead>
+                              <TableHead>Patient</TableHead>
+                              <TableHead>Facility</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>Queued at</TableHead>
+                              <TableHead className="text-right">Action</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {queueEntries.map((entry) => (
+                              <TableRow key={`q-${entry.queueId}`}>
+                                <TableCell className="font-mono text-sm">
+                                  {entry.ticketNumber || `#${entry.queueId}`}
+                                </TableCell>
+                                <TableCell>
+                                  <p className="font-medium">
+                                    {`${entry.patientFirstName || ""} ${entry.patientLastName || ""}`.trim() || "—"}
+                                  </p>
+                                  {entry.patientNumber ? (
+                                    <p className="text-xs text-muted-foreground">{entry.patientNumber}</p>
+                                  ) : null}
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant="outline">{entry.branchName || "Unassigned"}</Badge>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant={entry.status === "serving" ? "default" : "outline"}>
+                                    {humanizeStatus(entry.status)}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                                  {formatWhen(entry.arrivalTime || entry.createdAt)}
+                                </TableCell>
+                                <TableCell className="text-right">
+                                  <Button size="sm" asChild>
+                                    <Link href="/telemedicine/create">Start visit</Link>
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    ) : null}
+
+                    {sessions.length > 0 ? (
+                      <div className="rounded-md border overflow-x-auto bg-background/50">
+                        <div className="border-b px-3 py-2 text-sm font-medium">
+                          Sessions created, not started yet
+                        </div>
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>ID</TableHead>
+                              <TableHead>Patient</TableHead>
+                              <TableHead>Facility</TableHead>
+                              <TableHead>Doctor</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>Date</TableHead>
+                              <TableHead className="min-w-[160px]">Open</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {sessions.map((s) => (
+                              <TableRow key={`s-${s.sessionId}`}>
+                                <TableCell className="font-mono text-sm">
+                                  <Link href={`/telemedicine/${s.sessionId}`} className="text-primary hover:underline">
+                                    #{s.sessionId}
+                                  </Link>
+                                </TableCell>
+                                <TableCell>
+                                  <div>
+                                    <p className="font-medium">
+                                      {s.patientFirstName || s.patientLastName
+                                        ? `${s.patientFirstName || ""} ${s.patientLastName || ""}`.trim()
+                                        : "—"}
+                                    </p>
+                                    {s.patientNumber ? (
+                                      <p className="text-xs text-muted-foreground">{s.patientNumber}</p>
+                                    ) : null}
+                                  </div>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant="outline">{s.branchName || "Unassigned"}</Badge>
+                                </TableCell>
+                                <TableCell>
+                                  {s.doctorFirstName || s.doctorLastName
+                                    ? `${s.doctorFirstName || ""} ${s.doctorLastName || ""}`.trim()
+                                    : "—"}
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant="outline">{humanizeStatus(s.status)}</Badge>
+                                </TableCell>
+                                <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                                  {formatWhen(s.activityAt || s.createdAt)}
+                                </TableCell>
+                                <TableCell>
+                                  <Button size="sm" variant="outline" asChild>
+                                    <Link href={`/telemedicine/${s.sessionId}`}>Open session</Link>
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    ) : null}
+                  </div>
+                )
               ) : sessions.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-8 text-center">
-                  No sessions yet. Start one from{" "}
+                  No {sessionCategory === "all" ? "" : humanizeStatus(sessionCategory).toLowerCase() + " "}sessions found.
+                  Start one from{" "}
                   <Link href="/telemedicine/create" className="underline">
                     Telemedicine sessions
                   </Link>
@@ -170,11 +371,12 @@ export default function TelemedicineHubPage() {
                         <TableRow>
                           <TableHead>ID</TableHead>
                           <TableHead>Patient</TableHead>
+                          <TableHead>Facility</TableHead>
                           <TableHead>Doctor</TableHead>
                           <TableHead>Platform</TableHead>
                           <TableHead>Origin</TableHead>
                           <TableHead>Status</TableHead>
-                          <TableHead>Created</TableHead>
+                          <TableHead>Date</TableHead>
                           <TableHead className="min-w-[200px]">Join &amp; copy</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -193,8 +395,13 @@ export default function TelemedicineHubPage() {
                                     ? `${s.patientFirstName || ""} ${s.patientLastName || ""}`.trim()
                                     : "—"}
                                 </p>
-                                {s.patientNumber && <p className="text-xs text-muted-foreground">{s.patientNumber}</p>}
+                                {s.patientNumber && (
+                                  <p className="text-xs text-muted-foreground">{s.patientNumber}</p>
+                                )}
                               </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{s.branchName || "Unassigned"}</Badge>
                             </TableCell>
                             <TableCell>
                               {s.doctorFirstName || s.doctorLastName
@@ -210,10 +417,12 @@ export default function TelemedicineHubPage() {
                               <Badge variant="outline">{s.originType || "—"}</Badge>
                             </TableCell>
                             <TableCell>
-                              <Badge variant="secondary">{s.status || "—"}</Badge>
+                              <Badge variant={s.status === "in_progress" ? "default" : "secondary"}>
+                                {humanizeStatus(s.status)}
+                              </Badge>
                             </TableCell>
                             <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                              {formatWhen(s.createdAt)}
+                              {formatWhen(s.activityAt || s.endedAt || s.startedAt || s.createdAt)}
                             </TableCell>
                             <TableCell className="align-top">
                               <TelemedicineMeetingLinkActions
@@ -234,11 +443,21 @@ export default function TelemedicineHubPage() {
                       Page {page} of {totalPages} · {total} total
                     </p>
                     <div className="flex gap-2">
-                      <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={page <= 1}
+                        onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      >
                         <ChevronLeft className="h-4 w-4" />
                         Previous
                       </Button>
-                      <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={page >= totalPages}
+                        onClick={() => setPage((p) => p + 1)}
+                      >
                         Next
                         <ChevronRight className="h-4 w-4" />
                       </Button>
@@ -246,6 +465,10 @@ export default function TelemedicineHubPage() {
                   </div>
                 </>
               )}
+            </TabsContent>
+
+            <TabsContent value="analytics" className="mt-0 outline-none focus-visible:ring-0">
+              <TelemedicineMetrics />
             </TabsContent>
           </CardContent>
         </Tabs>

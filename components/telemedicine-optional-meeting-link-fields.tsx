@@ -73,6 +73,10 @@ export function TelemedicineOptionalMeetingLinkFields({
           <>
             Your <strong>My Zoom defaults</strong> fill these when empty. Edit before starting if needed, or paste later in the session panel.
           </>
+        ) : videoProvider === "daily" ? (
+          <>
+            Leave blank to <strong>auto-create a Daily.co room</strong> when the session starts, or paste an existing Daily room URL.
+          </>
         ) : (
           <>
             paste the meeting link here before starting, or paste it in the <strong>telemedicine session panel</strong> after the visit opens.

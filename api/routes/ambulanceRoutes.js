@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
+const { notifyAmbulanceDispatched } = require('../lib/patientSms');
 
 /**
  * @route GET /api/ambulance
@@ -446,6 +447,16 @@ router.post('/trips', async (req, res) => {
              WHERE at.tripId = ?`,
             [result.insertId]
         );
+
+        const tripStatus = String(status || newTrip[0]?.status || '').toLowerCase();
+        if (
+            patientId &&
+            ['scheduled', 'dispatched', 'in_progress'].includes(tripStatus)
+        ) {
+            notifyAmbulanceDispatched(patientId, {
+                pickupLocation,
+            });
+        }
 
         res.status(201).json(newTrip[0]);
     } catch (error) {

@@ -6,7 +6,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Download, Eye, AlertCircle } from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Download, Eye, AlertCircle, MoreHorizontal } from "lucide-react"
 import { billingApi } from "@/lib/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -34,6 +42,65 @@ type InvoiceItem = {
   unitPrice: number
   total: number
   category: string
+}
+
+const VISIBLE_INVOICE_ITEMS = 2
+
+function InvoiceItemsPreview({ items }: { items: InvoiceItem[] }) {
+  if (!items?.length) {
+    return <span className="text-sm text-muted-foreground">—</span>
+  }
+
+  const visible = items.slice(0, VISIBLE_INVOICE_ITEMS)
+  const remaining = items.slice(VISIBLE_INVOICE_ITEMS)
+
+  return (
+    <div className="flex max-w-[280px] flex-wrap items-center gap-1">
+      {visible.map((item, index) => (
+        <span
+          key={`${item.description}-${index}`}
+          className="inline-flex max-w-[160px] truncate rounded-md bg-muted px-1.5 py-0.5 text-xs text-foreground"
+          title={`${item.description}${item.quantity > 1 ? ` ×${item.quantity}` : ""} · KES ${item.total.toLocaleString()}`}
+        >
+          {item.description}
+          {item.quantity > 1 ? ` ×${item.quantity}` : ""}
+        </span>
+      ))}
+      {remaining.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 gap-0.5 px-1.5 text-muted-foreground"
+              title={`${remaining.length} more item${remaining.length === 1 ? "" : "s"}`}
+            >
+              <MoreHorizontal className="h-4 w-4" />
+              <span className="text-xs">+{remaining.length}</span>
+              <span className="sr-only">Show {remaining.length} more items</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="max-h-64 w-72 overflow-y-auto">
+            <DropdownMenuLabel>All line items ({items.length})</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {items.map((item, index) => (
+              <DropdownMenuItem
+                key={`${item.description}-all-${index}`}
+                className="flex cursor-default flex-col items-start gap-0.5 focus:bg-accent"
+                onSelect={(event) => event.preventDefault()}
+              >
+                <span className="line-clamp-2 text-sm font-medium">{item.description}</span>
+                <span className="text-xs text-muted-foreground">
+                  Qty {item.quantity} · KES {item.total.toLocaleString()}
+                </span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
+    </div>
+  )
 }
 
 export function PatientBilling({ patientId }: { patientId: string }) {
@@ -236,6 +303,7 @@ export function PatientBilling({ patientId }: { patientId: string }) {
                     <TableRow>
                       <TableHead>Invoice #</TableHead>
                       <TableHead>Date</TableHead>
+                      <TableHead>Items</TableHead>
                       <TableHead>Amount</TableHead>
                       <TableHead>Insurance</TableHead>
                       <TableHead>Patient</TableHead>
@@ -248,6 +316,9 @@ export function PatientBilling({ patientId }: { patientId: string }) {
                       <TableRow key={bill.id}>
                         <TableCell className="font-medium">{bill.id}</TableCell>
                         <TableCell>{bill.date}</TableCell>
+                        <TableCell>
+                          <InvoiceItemsPreview items={bill.items} />
+                        </TableCell>
                         <TableCell>KES {bill.amount.toLocaleString()}</TableCell>
                         <TableCell>KES {bill.insuranceCoverage.toLocaleString()}</TableCell>
                         <TableCell>KES {bill.patientResponsibility.toLocaleString()}</TableCell>
@@ -263,10 +334,12 @@ export function PatientBilling({ patientId }: { patientId: string }) {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
+                          <div className="flex justify-end gap-1">
                             <Button
                               variant="outline"
-                              size="sm"
+                              size="icon"
+                              className="h-8 w-8"
+                              title="View invoice details"
                               onClick={() => {
                                 if (bill.invoiceId) {
                                   setSelectedInvoiceId(bill.invoiceId.toString())
@@ -274,12 +347,12 @@ export function PatientBilling({ patientId }: { patientId: string }) {
                                 }
                               }}
                             >
-                              <Eye className="h-4 w-4 mr-1" />
-                              View
+                              <Eye className="h-4 w-4" />
+                              <span className="sr-only">View</span>
                             </Button>
-                            <Button variant="outline" size="sm">
-                              <Download className="h-4 w-4 mr-1" />
-                              PDF
+                            <Button variant="outline" size="icon" className="h-8 w-8" title="Download PDF">
+                              <Download className="h-4 w-4" />
+                              <span className="sr-only">PDF</span>
                             </Button>
                           </div>
                         </TableCell>
@@ -302,6 +375,7 @@ export function PatientBilling({ patientId }: { patientId: string }) {
                       <TableHead>Invoice #</TableHead>
                       <TableHead>Date</TableHead>
                       <TableHead>Due Date</TableHead>
+                      <TableHead>Items</TableHead>
                       <TableHead>Amount</TableHead>
                       <TableHead>Insurance</TableHead>
                       <TableHead>Patient</TableHead>
@@ -314,6 +388,9 @@ export function PatientBilling({ patientId }: { patientId: string }) {
                         <TableCell className="font-medium">{bill.id}</TableCell>
                         <TableCell>{bill.date}</TableCell>
                         <TableCell>{bill.dueDate}</TableCell>
+                        <TableCell>
+                          <InvoiceItemsPreview items={bill.items} />
+                        </TableCell>
                         <TableCell>KES {bill.amount.toLocaleString()}</TableCell>
                         <TableCell>KES {bill.insuranceCoverage.toLocaleString()}</TableCell>
                         <TableCell>KES {bill.patientResponsibility.toLocaleString()}</TableCell>
@@ -338,6 +415,7 @@ export function PatientBilling({ patientId }: { patientId: string }) {
                     <TableRow>
                       <TableHead>Invoice #</TableHead>
                       <TableHead>Date</TableHead>
+                      <TableHead>Items</TableHead>
                       <TableHead>Amount</TableHead>
                       <TableHead>Payment Method</TableHead>
                       <TableHead>Payment Date</TableHead>
@@ -349,23 +427,43 @@ export function PatientBilling({ patientId }: { patientId: string }) {
                       <TableRow key={bill.id}>
                         <TableCell className="font-medium">{bill.id}</TableCell>
                         <TableCell>{bill.date}</TableCell>
+                        <TableCell>
+                          <InvoiceItemsPreview items={bill.items} />
+                        </TableCell>
                         <TableCell>KES {bill.amount.toLocaleString()}</TableCell>
                         <TableCell>{bill.paymentMethod}</TableCell>
                         <TableCell>{bill.paymentDate || 'N/A'}</TableCell>
                         <TableCell className="text-right">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              if (bill.invoiceId) {
-                                setSelectedInvoiceId(bill.invoiceId.toString())
-                                setReceiptDialogOpen(true)
-                              }
-                            }}
-                          >
-                            <Download className="h-4 w-4 mr-1" />
-                            Receipt
-                          </Button>
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8"
+                              title="View invoice details"
+                              onClick={() => {
+                                if (bill.invoiceId) {
+                                  setSelectedInvoiceId(bill.invoiceId.toString())
+                                  setInvoiceDialogOpen(true)
+                                }
+                              }}
+                            >
+                              <Eye className="h-4 w-4" />
+                              <span className="sr-only">View</span>
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                if (bill.invoiceId) {
+                                  setSelectedInvoiceId(bill.invoiceId.toString())
+                                  setReceiptDialogOpen(true)
+                                }
+                              }}
+                            >
+                              <Download className="h-4 w-4 mr-1" />
+                              Receipt
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -385,6 +483,7 @@ export function PatientBilling({ patientId }: { patientId: string }) {
                     <TableRow>
                       <TableHead>Invoice #</TableHead>
                       <TableHead>Date</TableHead>
+                      <TableHead>Items</TableHead>
                       <TableHead>Amount</TableHead>
                       <TableHead>Insurance</TableHead>
                       <TableHead>Patient</TableHead>
@@ -397,6 +496,9 @@ export function PatientBilling({ patientId }: { patientId: string }) {
                       <TableRow key={bill.id}>
                         <TableCell className="font-medium">{bill.id}</TableCell>
                         <TableCell>{bill.date}</TableCell>
+                        <TableCell>
+                          <InvoiceItemsPreview items={bill.items} />
+                        </TableCell>
                         <TableCell>KES {bill.amount.toLocaleString()}</TableCell>
                         <TableCell>KES {bill.insuranceCoverage.toLocaleString()}</TableCell>
                         <TableCell>KES {bill.patientResponsibility.toLocaleString()}</TableCell>
@@ -404,10 +506,12 @@ export function PatientBilling({ patientId }: { patientId: string }) {
                           <Badge variant="outline">Waived</Badge>
                         </TableCell>
                         <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
+                          <div className="flex justify-end gap-1">
                             <Button
                               variant="outline"
-                              size="sm"
+                              size="icon"
+                              className="h-8 w-8"
+                              title="View invoice details"
                               onClick={() => {
                                 if (bill.invoiceId) {
                                   setSelectedInvoiceId(bill.invoiceId.toString())
@@ -415,12 +519,12 @@ export function PatientBilling({ patientId }: { patientId: string }) {
                                 }
                               }}
                             >
-                              <Eye className="h-4 w-4 mr-1" />
-                              View
+                              <Eye className="h-4 w-4" />
+                              <span className="sr-only">View</span>
                             </Button>
-                            <Button variant="outline" size="sm">
-                              <Download className="h-4 w-4 mr-1" />
-                              PDF
+                            <Button variant="outline" size="icon" className="h-8 w-8" title="Download PDF">
+                              <Download className="h-4 w-4" />
+                              <span className="sr-only">PDF</span>
                             </Button>
                           </div>
                         </TableCell>

@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
 import { telemedicineApi } from "@/lib/api"
-import { getTelemedicineProviderLabel, getTelemedicineProviderOption, isZoomProvider, meetingLinkFieldLabel, type TelemedicineVideoProviderId } from "@/lib/telemedicine-providers"
+import { getTelemedicineProviderLabel, getTelemedicineProviderOption, isDailyProvider, isZoomProvider, meetingLinkFieldLabel, DEFAULT_TELEMEDICINE_VIDEO_PROVIDER, type TelemedicineVideoProviderId } from "@/lib/telemedicine-providers"
 import { TelemedicineProviderSelect } from "@/components/telemedicine-provider-select"
 import { TelemedicineHelpLink } from "@/components/telemedicine-help-link"
 import {
@@ -32,6 +32,11 @@ import { zoomMeetingUrlsMatch } from "@/lib/zoom-url-utils"
 const ZoomEmbeddedMeeting = dynamic(
   () => import("@/components/zoom-embedded-meeting").then((m) => m.ZoomEmbeddedMeeting),
   { ssr: false, loading: () => <p className="text-xs text-muted-foreground py-2">Loading video module…</p> }
+)
+
+const DailyEmbeddedMeeting = dynamic(
+  () => import("@/components/daily-embedded-meeting").then((m) => m.DailyEmbeddedMeeting),
+  { ssr: false, loading: () => <p className="text-xs text-muted-foreground py-2">Loading Daily video…</p> }
 )
 
 function calculateAgeYears(dob: string | null | undefined) {
@@ -87,6 +92,9 @@ export function TelemedicineSessionPanel({
   /** Zoom Meeting SDK embed (optional — requires API env + standard /j/######## URL) */
   const [showEmbeddedZoom, setShowEmbeddedZoom] = useState(variant === "floating")
   const [sdkEmbedConfigured, setSdkEmbedConfigured] = useState<boolean | null>(null)
+  const [dailyConfigured, setDailyConfigured] = useState<boolean | null>(null)
+  const [showEmbeddedDaily, setShowEmbeddedDaily] = useState(true)
+  const [ensuringDaily, setEnsuringDaily] = useState(false)
   /** For Host vs Participant inference in embedded Zoom (same meeting id as “My Zoom defaults”). */
   const [myDefaultZoomJoinUrl, setMyDefaultZoomJoinUrl] = useState<string | null>(null)
   /** Meeting link / consent block collapsed by default to maximize video area */
@@ -128,10 +136,58 @@ export function TelemedicineSessionPanel({
       .catch(() => {
         if (!cancelled) setSdkEmbedConfigured(false)
       })
+    telemedicineApi
+      .getDailyStatus()
+      .then((r) => {
+        if (!cancelled) setDailyConfigured(!!r.configured)
+      })
+      .catch(() => {
+        if (!cancelled) setDailyConfigured(false)
+      })
     return () => {
       cancelled = true
     }
   }, [])
+
+  // Auto-create Daily room when session is Daily but has no join URL yet
+  useEffect(() => {
+    if (!sessionId || !session) return
+    if (!isDailyProvider(session.provider as string)) return
+    if (session.zoomJoinUrl || zoomJoinUrl.trim()) return
+    if (session.status === "ended") return
+    if (dailyConfigured === false) return
+
+    let cancelled = false
+    const run = async () => {
+      try {
+        setEnsuringDaily(true)
+        const r = await telemedicineApi.ensureDailyRoom(sessionId)
+        if (cancelled) return
+        setZoomJoinUrl(r.zoomJoinUrl || "")
+        setSession((prev: any) =>
+          prev
+            ? { ...prev, provider: "daily", zoomJoinUrl: r.zoomJoinUrl }
+            : prev
+        )
+        if (r.created) {
+          toast({
+            title: "Daily room ready",
+            description: "A Daily.co room was created for this visit. Share the link or use in-page video.",
+          })
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          console.error("ensureDailyRoom failed:", err)
+        }
+      } finally {
+        if (!cancelled) setEnsuringDaily(false)
+      }
+    }
+    run()
+    return () => {
+      cancelled = true
+    }
+  }, [sessionId, session?.provider, session?.zoomJoinUrl, session?.status, zoomJoinUrl, dailyConfigured, toast])
 
   useEffect(() => {
     if (!session || !isZoomProvider((session.provider as string) || "")) {
@@ -234,7 +290,7 @@ export function TelemedicineSessionPanel({
       setZoomJoinUrl(d.defaultZoomJoinUrl)
       setZoomPassword(d.defaultZoomPassword || "")
       await telemedicineApi.updateSessionLink(sessionId, {
-        provider: "zoom_manual",
+        provider: DEFAULT_TELEMEDICINE_VIDEO_PROVIDER,
         zoomJoinUrl: d.defaultZoomJoinUrl.trim(),
         zoomPassword: d.defaultZoomPassword?.trim() || null,
       })
@@ -256,7 +312,7 @@ export function TelemedicineSessionPanel({
     try {
       setSavingLink(true)
       await telemedicineApi.updateSessionLink(sessionId, {
-        provider: (session.provider as string) || "zoom_manual",
+        provider: (session.provider as string) || DEFAULT_TELEMEDICINE_VIDEO_PROVIDER,
         zoomJoinUrl: zoomJoinUrl.trim() || null,
         zoomPassword: zoomPassword.trim() || null,
       })
@@ -356,7 +412,7 @@ export function TelemedicineSessionPanel({
     )
   }
 
-  const videoProviderId = ((session.provider as string) || "zoom_manual") as TelemedicineVideoProviderId
+  const videoProviderId = ((session.provider as string) || DEFAULT_TELEMEDICINE_VIDEO_PROVIDER) as TelemedicineVideoProviderId
   const providerOption = getTelemedicineProviderOption(videoProviderId)
   const externalMeetingHref = zoomJoinUrl.trim()
     ? /^https?:\/\//i.test(zoomJoinUrl.trim())
@@ -365,8 +421,11 @@ export function TelemedicineSessionPanel({
     : ""
 
   const hasLink = !!(session.zoomJoinUrl || zoomJoinUrl.trim())
+  const canEmbedDaily = isDailyProvider(videoProviderId) && hasLink && session.status !== "ended"
 
-  const wrapperClass = isFloating ? "flex min-h-0 min-w-0 h-full flex-col text-sm" : "max-w-3xl mx-auto space-y-4"
+  const wrapperClass = isFloating
+    ? "flex min-h-0 min-w-0 h-full flex-col text-sm"
+    : "mx-auto w-full max-w-6xl space-y-4"
 
   const meetingDetailsInner = (
     <>
@@ -376,6 +435,7 @@ export function TelemedicineSessionPanel({
           onChange={(provider) => {
             setSession({ ...session, provider })
             if (!isZoomProvider(provider)) setShowEmbeddedZoom(false)
+            if (isDailyProvider(provider)) setShowEmbeddedDaily(true)
           }}
           variant="compact"
           label="Video platform"
@@ -436,9 +496,16 @@ export function TelemedicineSessionPanel({
             </Button>
           )}
         </div>
-        {!isZoomProvider(videoProviderId) && (
+        {!isZoomProvider(videoProviderId) && !isDailyProvider(videoProviderId) && (
           <p className="text-xs text-muted-foreground">
-            {getTelemedicineProviderLabel(videoProviderId)} opens in a separate browser tab. HMIS stores and shares the link; it does not embed Meet in-page.
+            {getTelemedicineProviderLabel(videoProviderId)} opens in a separate browser tab. HMIS stores and shares the link; it does not embed that platform in-page.
+          </p>
+        )}
+        {isDailyProvider(videoProviderId) && (
+          <p className="text-xs text-muted-foreground">
+            Daily.co is the default in-HMIS video. Rooms are created automatically when configured; patients join via the SMS/link, and staff can use the embedded player below.
+            {ensuringDaily ? " Creating room…" : ""}
+            {dailyConfigured === false ? " Set DAILY_API_KEY on the API to auto-create rooms, or paste a Daily link." : ""}
           </p>
         )}
       </div>
@@ -581,6 +648,18 @@ export function TelemedicineSessionPanel({
                   )}
                 <div className="min-w-0 flex-1" aria-hidden />
                 <div className="flex shrink-0 items-center gap-px">
+                  {canEmbedDaily && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      title={showEmbeddedDaily ? "Hide Daily video" : "Show Daily video"}
+                      onClick={() => setShowEmbeddedDaily((v) => !v)}
+                    >
+                      {showEmbeddedDaily ? <VideoOff className="h-3.5 w-3.5" /> : <Video className="h-3.5 w-3.5" />}
+                    </Button>
+                  )}
                   {isZoomProvider(videoProviderId) && sdkEmbedConfigured && hasLink && session.status !== "ended" && (
                     <Button
                       type="button"
@@ -627,6 +706,16 @@ export function TelemedicineSessionPanel({
                     session.status !== "ended" && <ZoomMeetingInfoPopover />}
                 </div>
               </div>
+
+              {canEmbedDaily && showEmbeddedDaily && (
+                <div className="relative z-10 flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-hidden">
+                  <DailyEmbeddedMeeting
+                    roomUrl={zoomJoinUrl || session.zoomJoinUrl}
+                    compact
+                    className="h-full min-h-0 w-full"
+                  />
+                </div>
+              )}
 
               {isZoomProvider(videoProviderId) && sdkEmbedConfigured && hasLink && showEmbeddedZoom && session.status !== "ended" && (
                 <div className="relative z-10 flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-hidden">
@@ -679,6 +768,61 @@ export function TelemedicineSessionPanel({
                 <TelemedicineHelpLink />
               </div>
               {meetingDetailsInner}
+
+              {isDailyProvider(videoProviderId) && (
+                <div className="space-y-2 rounded-lg border border-dashed border-primary/25 bg-muted/20 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-semibold">Daily.co video</span>
+                    <div className="flex flex-wrap gap-2">
+                      {!hasLink && dailyConfigured !== false && (
+                        <Button
+                          type="button"
+                          variant="default"
+                          size="sm"
+                          disabled={ensuringDaily}
+                          onClick={async () => {
+                            try {
+                              setEnsuringDaily(true)
+                              const r = await telemedicineApi.ensureDailyRoom(sessionId)
+                              setZoomJoinUrl(r.zoomJoinUrl || "")
+                              setSession((prev: any) =>
+                                prev ? { ...prev, provider: "daily", zoomJoinUrl: r.zoomJoinUrl } : prev
+                              )
+                              setShowEmbeddedDaily(true)
+                            } catch (err: any) {
+                              toast({
+                                title: "Could not create Daily room",
+                                description: err?.message || "Check DAILY_API_KEY on the API server.",
+                                variant: "destructive",
+                              })
+                            } finally {
+                              setEnsuringDaily(false)
+                            }
+                          }}
+                        >
+                          {ensuringDaily ? "Creating…" : "Create Daily room"}
+                        </Button>
+                      )}
+                      {hasLink && (
+                        <Button
+                          type="button"
+                          variant={showEmbeddedDaily ? "secondary" : "default"}
+                          size="sm"
+                          onClick={() => setShowEmbeddedDaily((v) => !v)}
+                        >
+                          {showEmbeddedDaily ? "Hide video" : "Show video in page"}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    In-page Daily Prebuilt. Patients join the same room via the shared link / SMS.
+                  </p>
+                  {canEmbedDaily && showEmbeddedDaily && (
+                    <DailyEmbeddedMeeting roomUrl={zoomJoinUrl || session.zoomJoinUrl} />
+                  )}
+                </div>
+              )}
 
               {isZoomProvider(videoProviderId) && sdkEmbedConfigured && hasLink && (
                 <div className="space-y-2 rounded-lg border border-dashed border-primary/25 bg-muted/20 p-3">

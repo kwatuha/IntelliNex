@@ -15,11 +15,19 @@ import {
   type QueueStatus,
 } from "@/lib/data/queue-data"
 import { toast } from "@/components/ui/use-toast"
-import { PatientEncounterForm } from "@/components/patient-encounter-form"
-import { DispenseMedicationDialog } from "@/components/dispense-medication-dialog"
+import dynamic from "next/dynamic"
 import { useAuth } from "@/lib/auth/auth-context"
 import { queueApi } from "@/lib/api"
 import { Loader2, Pill } from "lucide-react"
+
+const PatientEncounterForm = dynamic(
+  () => import("@/components/patient-encounter-form").then((m) => m.PatientEncounterForm),
+  { ssr: false, loading: () => null }
+)
+const DispenseMedicationDialog = dynamic(
+  () => import("@/components/dispense-medication-dialog").then((m) => m.DispenseMedicationDialog),
+  { ssr: false, loading: () => null }
+)
 
 interface CallPatientPanelProps {
   servicePoint: ServicePoint

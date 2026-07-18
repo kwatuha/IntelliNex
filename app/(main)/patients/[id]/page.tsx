@@ -10,6 +10,8 @@ import {
   HeartPulse,
   History,
   Home,
+  PanelLeftClose,
+  PanelLeftOpen,
   PillIcon as Pills,
   Stethoscope,
   Package,
@@ -20,6 +22,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { RoleFilteredTabs } from "@/components/role-filtered-tabs"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { cn } from "@/lib/utils"
 import { PatientTimeline } from "@/components/patient-timeline"
 import { PatientVitals } from "@/components/patient-vitals"
 import { PatientAlerts } from "@/components/patient-alerts"
@@ -34,6 +37,7 @@ import { PatientBilling } from "@/components/patient-billing"
 import { PatientAdmissions } from "@/components/patient-admissions"
 import { PatientDocuments } from "@/components/patient-documents"
 import { PatientAllergies } from "@/components/patient-allergies"
+import { PatientNcd } from "@/components/patient-ncd"
 import { PatientInsurance } from "@/components/patient-insurance"
 import { PatientFamilyHistory } from "@/components/patient-family-history"
 import { PatientQueueStatus } from "@/components/patient-queue-status"
@@ -41,7 +45,7 @@ import { patientApi, insuranceApi, queueApi } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import Link from "next/link"
 import { AddToQueueDialog, type QueueServicePointChoice, queueTypeLabel } from "@/components/add-to-queue-dialog"
-import { StaticRouteRegex, useResolvedRouteParam } from "@/lib/utils/static-export-params"
+import { StaticRouteRegex, useResolvedRouteParam, STATIC_EXPORT_PARAM_PLACEHOLDER } from "@/lib/utils/static-export-params"
 
 export default function PatientProfilePage() {
   const { toast } = useToast()
@@ -52,38 +56,53 @@ export default function PatientProfilePage() {
   const [error, setError] = useState<string | null>(null)
   const [addingToTriage, setAddingToTriage] = useState(false)
   const [confirmTriageOpen, setConfirmTriageOpen] = useState(false)
+  const [patientInfoOpen, setPatientInfoOpen] = useState(true)
+  const [reloadKey, setReloadKey] = useState(0)
 
   useEffect(() => {
-    loadPatient()
-  }, [patientId])
+    let cancelled = false
 
-  const loadPatient = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-      const data = await patientApi.getById(patientId)
-      setPatient(data)
+    const loadPatient = async () => {
+      if (!patientId || patientId === STATIC_EXPORT_PARAM_PLACEHOLDER) {
+        setLoading(false)
+        return
+      }
 
-      // Fetch insurance company name if insuranceCompanyId exists
-      if (data.insuranceCompanyId) {
-        try {
-          const provider = await insuranceApi.getProviderById(data.insuranceCompanyId.toString())
-          setInsuranceCompanyName(provider.providerName || null)
-        } catch (err) {
-          console.error('Error loading insurance provider:', err)
+      try {
+        setLoading(true)
+        setError(null)
+        const data = await patientApi.getById(patientId)
+        if (cancelled) return
+        setPatient(data)
+
+        if (data.insuranceCompanyId) {
+          try {
+            const provider = await insuranceApi.getProviderById(data.insuranceCompanyId.toString())
+            if (cancelled) return
+            setInsuranceCompanyName(provider.providerName || null)
+          } catch (err) {
+            console.error('Error loading insurance provider:', err)
+            if (!cancelled) setInsuranceCompanyName(null)
+          }
+        } else if (!cancelled) {
           setInsuranceCompanyName(null)
         }
-      } else {
-        setInsuranceCompanyName(null)
+      } catch (err: any) {
+        if (cancelled) return
+        setError(err.message || 'Failed to load patient')
+        console.error('Error loading patient:', err)
+      } finally {
+        if (!cancelled) setLoading(false)
       }
-    } catch (err: any) {
-      setError(err.message || 'Failed to load patient')
-      console.error('Error loading patient:', err)
-    } finally {
-      setLoading(false)
     }
-  }
 
+    void loadPatient()
+    return () => {
+      cancelled = true
+    }
+  }, [patientId, reloadKey])
+
+  const retryLoadPatient = () => setReloadKey((k) => k + 1)
   const calculateAge = (dateOfBirth?: string): number | null => {
     if (!dateOfBirth) return null
     const today = new Date()
@@ -173,7 +192,7 @@ export default function PatientProfilePage() {
         <div className="text-center py-8 text-red-500">
           {error || 'Patient not found'}
         </div>
-        <Button onClick={loadPatient}>Retry</Button>
+        <Button onClick={retryLoadPatient}>Retry</Button>
       </div>
     )
   }
@@ -260,204 +279,264 @@ export default function PatientProfilePage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-        {/* Patient Profile Card */}
-        <Card className="md:col-span-1">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-lg font-medium">Patient Information</CardTitle>
-            <Badge variant={patientDisplay.status === "Active" ? "default" : "outline"}>{patientDisplay.status}</Badge>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-col items-center space-y-3 pb-4">
-              <Avatar className="h-24 w-24">
-                <AvatarImage src={patientDisplay.avatar || "/placeholder.svg"} alt={patientDisplay.name} />
-                <AvatarFallback>{patientDisplay.initials}</AvatarFallback>
-              </Avatar>
-              <div className="space-y-1 text-center">
-                <h3 className="text-xl font-semibold">{patientDisplay.name}</h3>
-                <p className="text-sm text-muted-foreground">
-                  #{patientDisplay.id} • {patientDisplay.age !== null ? `${patientDisplay.age} years` : 'Age N/A'} • {patientDisplay.gender}
-                </p>
+      <div className="space-y-4">
+        {!patientInfoOpen && (
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-card px-4 py-3">
+            <Avatar className="h-10 w-10">
+              <AvatarImage src={patientDisplay.avatar || "/placeholder.svg"} alt={patientDisplay.name} />
+              <AvatarFallback>{patientDisplay.initials}</AvatarFallback>
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="truncate font-semibold">{patientDisplay.name}</p>
+                <Badge variant={patientDisplay.status === "Active" ? "default" : "outline"}>
+                  {patientDisplay.status}
+                </Badge>
               </div>
+              <p className="text-sm text-muted-foreground">
+                #{patientDisplay.id}
+                {patientDisplay.age !== null ? ` • ${patientDisplay.age} years` : ""}
+                {patientDisplay.gender ? ` • ${patientDisplay.gender}` : ""}
+              </p>
             </div>
-
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Date of Birth</p>
-                  <p className="text-sm font-medium">{patientDisplay.dob}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Blood Type</p>
-                  <p className="text-sm font-medium">{patientDisplay.bloodType}</p>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">Contact</p>
-                <p className="text-sm font-medium">{patientDisplay.contact}</p>
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">Email</p>
-                <p className="text-sm font-medium">{patientDisplay.email}</p>
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">Address</p>
-                <p className="text-sm font-medium">{patientDisplay.address}</p>
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">Emergency Contact</p>
-                <p className="text-sm font-medium">{patientDisplay.emergencyContact}</p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Occupation</p>
-                  <p className="text-sm font-medium">{patientDisplay.occupation}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Marital Status</p>
-                  <p className="text-sm font-medium">{patientDisplay.maritalStatus}</p>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">National ID</p>
-                <p className="text-sm font-medium">{patientDisplay.nationalId}</p>
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">Patient Type</p>
-                <p className="text-sm font-medium capitalize">{patientDisplay.patientType}</p>
-              </div>
-              {patientDisplay.patientType === 'insurance' && (
-                <>
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Insurance Company</p>
-                    <p className="text-sm font-medium">{patientDisplay.insuranceProvider}</p>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground">Insurance Number</p>
-                    <p className="text-sm font-medium">{patientDisplay.insuranceNumber}</p>
-                  </div>
-                </>
-              )}
-
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">Primary Doctor</p>
-                <p className="text-sm font-medium">{patientDisplay.primaryDoctor}</p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Registration Date</p>
-                  <p className="text-sm font-medium">{patientDisplay.registrationDate}</p>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Last Visit</p>
-                  <p className="text-sm font-medium">{patientDisplay.lastVisit}</p>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">Next Appointment</p>
-                <p className="text-sm font-medium">{patientDisplay.nextAppointment}</p>
-              </div>
-
-              <PatientQueueStatus patientId={patientDisplay.id} />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Patient Medical Information Tabs */}
-        <Card className="md:col-span-2">
-          <CardHeader>
-            <CardTitle>Medical Information</CardTitle>
-            <CardDescription>Comprehensive medical history and current health status</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <RoleFilteredTabs
-              pagePath="/patients/[id]"
-              defaultValue="overview"
-              tabs={[
-                { value: "overview", label: "Overview" },
-                { value: "vitals", label: "Vitals" },
-                { value: "lab-results", label: "Lab Results" },
-                { value: "medications", label: "Medications" },
-                { value: "procedures", label: "Procedures" },
-                { value: "radiology", label: "Radiology" },
-                { value: "orders", label: "Orders" },
-                { value: "appointments", label: "Appointments" },
-                { value: "billing", label: "Billing" },
-                { value: "admissions", label: "Admissions" },
-                { value: "documents", label: "Documents" },
-                { value: "allergies", label: "Allergies" },
-                { value: "insurance", label: "Insurance" },
-                { value: "family-history", label: "Family History" },
-              ]}
-              className="space-y-6"
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setPatientInfoOpen(true)}
+              className="gap-2"
             >
-              <TabsContent value="overview" className="space-y-4">
-                <PatientMedicalOverview patientId={patientId} />
-              </TabsContent>
+              <PanelLeftOpen className="h-4 w-4" />
+              Patient details
+            </Button>
+          </div>
+        )}
 
-              <TabsContent value="vitals" className="space-y-4">
-                <PatientVitals patientId={patientId} />
-              </TabsContent>
+        <div
+          className={cn(
+            "grid grid-cols-1 gap-6",
+            patientInfoOpen ? "xl:grid-cols-[minmax(240px,300px)_minmax(0,1fr)]" : "grid-cols-1",
+          )}
+        >
+          {patientInfoOpen && (
+            <Card className="min-w-0 self-start">
+              <CardHeader className="flex flex-row items-start justify-between space-y-0 gap-2 pb-2">
+                <div className="min-w-0 space-y-1">
+                  <CardTitle className="text-lg font-medium">Patient Information</CardTitle>
+                  <Badge variant={patientDisplay.status === "Active" ? "default" : "outline"}>
+                    {patientDisplay.status}
+                  </Badge>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0"
+                  title="Hide patient information to give Medical Information more space"
+                  onClick={() => setPatientInfoOpen(false)}
+                >
+                  <PanelLeftClose className="h-4 w-4" />
+                  <span className="sr-only">Hide patient information</span>
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-col items-center space-y-3 pb-4">
+                  <Avatar className="h-24 w-24">
+                    <AvatarImage src={patientDisplay.avatar || "/placeholder.svg"} alt={patientDisplay.name} />
+                    <AvatarFallback>{patientDisplay.initials}</AvatarFallback>
+                  </Avatar>
+                  <div className="space-y-1 text-center">
+                    <h3 className="text-xl font-semibold">{patientDisplay.name}</h3>
+                    <p className="text-sm text-muted-foreground">
+                      #{patientDisplay.id} • {patientDisplay.age !== null ? `${patientDisplay.age} years` : 'Age N/A'} • {patientDisplay.gender}
+                    </p>
+                  </div>
+                </div>
 
-              <TabsContent value="lab-results" className="space-y-4">
-                <PatientLabResults patientId={patientId} />
-              </TabsContent>
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Date of Birth</p>
+                      <p className="text-sm font-medium">{patientDisplay.dob}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Blood Type</p>
+                      <p className="text-sm font-medium">{patientDisplay.bloodType}</p>
+                    </div>
+                  </div>
 
-              <TabsContent value="medications" className="space-y-4">
-                <PatientMedications patientId={patientId} />
-              </TabsContent>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Contact</p>
+                    <p className="text-sm font-medium">{patientDisplay.contact}</p>
+                  </div>
 
-              <TabsContent value="procedures" className="space-y-4">
-                <PatientProcedures patientId={patientId} />
-              </TabsContent>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Email</p>
+                    <p className="text-sm font-medium">{patientDisplay.email}</p>
+                  </div>
 
-              <TabsContent value="radiology" className="space-y-4">
-                <PatientRadiology patientId={patientId} />
-              </TabsContent>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Address</p>
+                    <p className="text-sm font-medium">{patientDisplay.address}</p>
+                  </div>
 
-              <TabsContent value="orders" className="space-y-4">
-                <PatientOrders patientId={patientId} />
-              </TabsContent>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Emergency Contact</p>
+                    <p className="text-sm font-medium">{patientDisplay.emergencyContact}</p>
+                  </div>
 
-              <TabsContent value="appointments" className="space-y-4">
-                <PatientAppointments patientId={patientId} />
-              </TabsContent>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Occupation</p>
+                      <p className="text-sm font-medium">{patientDisplay.occupation}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Marital Status</p>
+                      <p className="text-sm font-medium">{patientDisplay.maritalStatus}</p>
+                    </div>
+                  </div>
 
-              <TabsContent value="billing" className="space-y-4">
-                <PatientBilling patientId={patientId} />
-              </TabsContent>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">National ID</p>
+                    <p className="text-sm font-medium">{patientDisplay.nationalId}</p>
+                  </div>
 
-              <TabsContent value="admissions" className="space-y-4">
-                <PatientAdmissions patientId={patientId} />
-              </TabsContent>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Patient Type</p>
+                    <p className="text-sm font-medium capitalize">{patientDisplay.patientType}</p>
+                  </div>
+                  {patientDisplay.patientType === 'insurance' && (
+                    <>
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Insurance Company</p>
+                        <p className="text-sm font-medium">{patientDisplay.insuranceProvider}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Insurance Number</p>
+                        <p className="text-sm font-medium">{patientDisplay.insuranceNumber}</p>
+                      </div>
+                    </>
+                  )}
 
-              <TabsContent value="documents" className="space-y-4">
-                <PatientDocuments patientId={patientId} />
-              </TabsContent>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Primary Doctor</p>
+                    <p className="text-sm font-medium">{patientDisplay.primaryDoctor}</p>
+                  </div>
 
-              <TabsContent value="allergies" className="space-y-4">
-                <PatientAllergies patientId={patientId} />
-              </TabsContent>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Registration Date</p>
+                      <p className="text-sm font-medium">{patientDisplay.registrationDate}</p>
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">Last Visit</p>
+                      <p className="text-sm font-medium">{patientDisplay.lastVisit}</p>
+                    </div>
+                  </div>
 
-              <TabsContent value="insurance" className="space-y-4">
-                <PatientInsurance patientId={patientId} />
-              </TabsContent>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Next Appointment</p>
+                    <p className="text-sm font-medium">{patientDisplay.nextAppointment}</p>
+                  </div>
 
-              <TabsContent value="family-history" className="space-y-4">
-                <PatientFamilyHistory patientId={patientId} />
-              </TabsContent>
-            </RoleFilteredTabs>
-          </CardContent>
-        </Card>
+                  <PatientQueueStatus patientId={patientDisplay.id} />
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Patient Medical Information Tabs */}
+          <Card className="min-w-0">
+            <CardHeader>
+              <CardTitle>Medical Information</CardTitle>
+              <CardDescription>Comprehensive medical history and current health status</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <RoleFilteredTabs
+                pagePath="/patients/[id]"
+                defaultValue="overview"
+                tabs={[
+                  { value: "overview", label: "Overview" },
+                  { value: "vitals", label: "Vitals" },
+                  { value: "lab-results", label: "Lab Results" },
+                  { value: "medications", label: "Medications" },
+                  { value: "procedures", label: "Procedures" },
+                  { value: "radiology", label: "Radiology" },
+                  { value: "orders", label: "Orders" },
+                  { value: "appointments", label: "Appointments" },
+                  { value: "billing", label: "Billing" },
+                  { value: "admissions", label: "Admissions" },
+                  { value: "documents", label: "Documents" },
+                  { value: "allergies", label: "Allergies" },
+                  { value: "ncd", label: "NCD Care" },
+                  { value: "insurance", label: "Insurance" },
+                  { value: "family-history", label: "Family History" },
+                ]}
+                className="space-y-6"
+              >
+                <TabsContent value="overview" className="space-y-4">
+                  <PatientMedicalOverview patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="vitals" className="space-y-4">
+                  <PatientVitals patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="lab-results" className="space-y-4">
+                  <PatientLabResults patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="medications" className="space-y-4">
+                  <PatientMedications patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="procedures" className="space-y-4">
+                  <PatientProcedures patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="radiology" className="space-y-4">
+                  <PatientRadiology patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="orders" className="space-y-4">
+                  <PatientOrders patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="appointments" className="space-y-4">
+                  <PatientAppointments patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="billing" className="space-y-4">
+                  <PatientBilling patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="admissions" className="space-y-4">
+                  <PatientAdmissions patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="documents" className="space-y-4">
+                  <PatientDocuments patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="allergies" className="space-y-4">
+                  <PatientAllergies patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="ncd" className="space-y-4">
+                  <PatientNcd patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="insurance" className="space-y-4">
+                  <PatientInsurance patientId={patientId} />
+                </TabsContent>
+
+                <TabsContent value="family-history" className="space-y-4">
+                  <PatientFamilyHistory patientId={patientId} />
+                </TabsContent>
+              </RoleFilteredTabs>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   )

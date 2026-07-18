@@ -4,6 +4,11 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 
 const pool = require('../config/db');
+const { notifyTelemedicineScheduled } = require('../lib/patientSms');
+const { isDailyConfigured, createDailyRoom } = require('../lib/dailyVideo');
+const { resolveBranchForRequest } = require('../lib/branchContext');
+
+const DEFAULT_VIDEO_PROVIDER = 'daily';
 
 function getUserId(req) {
   const JWT_SECRET = process.env.JWT_SECRET || 'your_fallback_secret_for_dev_only_change_this_asap';
@@ -73,7 +78,9 @@ function mayViewFacilityTelemedicineBoard(roleName) {
     rn.includes('nurse') ||
     rn.includes('doctor') ||
     rn.includes('midwife') ||
-    rn.includes('clinical')
+    rn.includes('clinical') ||
+    rn.includes('triage') ||
+    rn.includes('clinician')
   );
 }
 
@@ -219,17 +226,34 @@ function validateMeetingUrlForProvider(provider, url) {
   if (provider === 'zoom_manual' && !host.includes('zoom.')) {
     return 'Zoom sessions must use a Zoom join link.';
   }
+  if (provider === 'daily' && !host.includes('daily.co')) {
+    return 'Daily.co sessions must use a *.daily.co room link.';
+  }
   return null;
 }
 
-/** Same normalization for Zoom, Meet, Teams, or any pasted HTTPS join URL */
+/** Same normalization for Zoom, Meet, Teams, Daily, or any pasted HTTPS join URL */
 const TELEMEDICINE_VIDEO_PROVIDERS = new Set([
+  'daily',
   'zoom_manual',
   'google_meet',
   'microsoft_teams',
   'other_link',
-  'daily',
 ]);
+
+async function ensureDailyJoinUrl({ existingUrl, sessionUuid }) {
+  const current = normalizeMeetingUrl(existingUrl);
+  if (current) return current;
+  if (!isDailyConfigured()) {
+    const err = new Error(
+      'Daily.co is not configured. Set DAILY_API_KEY on the API server, or paste a Daily room URL.'
+    );
+    err.code = 'DAILY_NOT_CONFIGURED';
+    throw err;
+  }
+  const room = await createDailyRoom({ sessionUuid });
+  return room.url;
+}
 
 /** Defaults for a clinician (Personal Meeting link, etc.) — optional table until migration 42. */
 async function fetchUserTelemedicineDefaults(conn, userId) {
@@ -329,7 +353,215 @@ router.put('/my-defaults', async (req, res) => {
   }
 });
 
-/** Create session (zoom_manual: no external API; optional link can be pasted later). */
+/**
+ * GET /api/telemedicine/analytics
+ * Held sessions are sessions that reached startedAt, not merely sessions that
+ * were created. The selected branch is resolved from X-Branch-Id and the
+ * caller's branch assignments.
+ */
+router.get('/analytics', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    // Read-only branch metrics: any authenticated user with a selected/assigned branch
+    // can view them (same idea as Facility Performance). Session join/list rules stay stricter.
+    const period = ['daily', 'weekly', 'monthly'].includes(String(req.query.period))
+      ? String(req.query.period)
+      : 'monthly';
+    const daysByPeriod = { daily: 1, weekly: 7, monthly: 30 };
+    const days = daysByPeriod[period];
+    const branch = await resolveBranchForRequest(pool, req, { userId });
+    if (!branch?.branchId) {
+      return res.status(200).json({
+        period,
+        days,
+        branch: null,
+        overview: {},
+        summary: {},
+        timeSeries: [],
+        byProvider: [],
+        byClinician: [],
+        message: 'Select a facility in the header to load telemedicine metrics.',
+      });
+    }
+
+    const branchId = Number(branch.branchId);
+    const [overviewRows] = await pool.execute(
+      `SELECT
+         COUNT(DISTINCT CASE WHEN startedAt >= CURDATE() THEN sessionId END) AS sessionsToday,
+         COUNT(DISTINCT CASE WHEN startedAt >= DATE_SUB(CURDATE(), INTERVAL 6 DAY) THEN sessionId END) AS sessionsWeek,
+         COUNT(DISTINCT CASE WHEN startedAt >= DATE_SUB(CURDATE(), INTERVAL 29 DAY) THEN sessionId END) AS sessionsMonth
+       FROM telemedicine_sessions
+       WHERE branchId = ? AND startedAt IS NOT NULL`,
+      [branchId]
+    );
+
+    const [summaryRows] = await pool.execute(
+      `SELECT
+         COUNT(DISTINCT CASE WHEN startedAt IS NOT NULL THEN sessionId END) AS sessionsHeld,
+         COUNT(DISTINCT CASE WHEN startedAt IS NOT NULL THEN patientId END) AS uniquePatients,
+         COUNT(DISTINCT CASE WHEN status = 'ended' AND startedAt IS NOT NULL THEN sessionId END) AS completedSessions,
+         COUNT(DISTINCT CASE WHEN status = 'in_progress' THEN sessionId END) AS activeSessions,
+         COUNT(DISTINCT CASE WHEN startedAt IS NULL THEN sessionId END) AS notStartedSessions,
+         ROUND(AVG(CASE
+           WHEN startedAt IS NOT NULL AND endedAt IS NOT NULL
+           THEN TIMESTAMPDIFF(MINUTE, startedAt, endedAt)
+         END), 1) AS averageMinutes,
+         COALESCE(SUM(CASE
+           WHEN startedAt IS NOT NULL AND endedAt IS NOT NULL
+           THEN TIMESTAMPDIFF(MINUTE, startedAt, endedAt)
+           ELSE 0
+         END), 0) AS totalMinutes
+       FROM telemedicine_sessions
+       WHERE branchId = ?
+         AND createdAt >= DATE_SUB(CURDATE(), INTERVAL ? DAY)`,
+      [branchId, days - 1]
+    );
+
+    const [timeRows] = await pool.execute(
+      `SELECT DATE(startedAt) AS date, COUNT(DISTINCT sessionId) AS sessionsHeld,
+              COUNT(DISTINCT patientId) AS uniquePatients
+       FROM telemedicine_sessions
+       WHERE branchId = ? AND startedAt >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+       GROUP BY DATE(startedAt)
+       ORDER BY DATE(startedAt)`,
+      [branchId, days - 1]
+    );
+
+    const [providerRows] = await pool.execute(
+      `SELECT provider, COUNT(DISTINCT sessionId) AS sessionsHeld
+       FROM telemedicine_sessions
+       WHERE branchId = ? AND startedAt >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+       GROUP BY provider
+       ORDER BY sessionsHeld DESC`,
+      [branchId, days - 1]
+    );
+
+    const [clinicianRows] = await pool.execute(
+      `SELECT ts.doctorId,
+              CONCAT_WS(' ', u.firstName, u.lastName) AS clinicianName,
+              COUNT(DISTINCT ts.sessionId) AS sessionsHeld,
+              COUNT(DISTINCT ts.patientId) AS uniquePatients
+       FROM telemedicine_sessions ts
+       LEFT JOIN users u ON u.userId = ts.doctorId
+       WHERE ts.branchId = ? AND ts.startedAt >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+       GROUP BY ts.doctorId, u.firstName, u.lastName
+       ORDER BY sessionsHeld DESC
+       LIMIT 10`,
+      [branchId, days - 1]
+    );
+
+    const summary = summaryRows[0] || {};
+    const held = Number(summary.sessionsHeld || 0);
+    const completed = Number(summary.completedSessions || 0);
+    const timeIndex = new Map(
+      timeRows.map((row) => [new Date(row.date).toISOString().slice(0, 10), row])
+    );
+    const timeSeries = [];
+    for (let offset = days - 1; offset >= 0; offset -= 1) {
+      const date = new Date();
+      date.setHours(12, 0, 0, 0);
+      date.setDate(date.getDate() - offset);
+      const key = date.toISOString().slice(0, 10);
+      const row = timeIndex.get(key);
+      timeSeries.push({
+        date: key,
+        sessionsHeld: Number(row?.sessionsHeld || 0),
+        uniquePatients: Number(row?.uniquePatients || 0),
+      });
+    }
+
+    return res.status(200).json({
+      period,
+      days,
+      branch,
+      overview: {
+        sessionsToday: Number(overviewRows[0]?.sessionsToday || 0),
+        sessionsWeek: Number(overviewRows[0]?.sessionsWeek || 0),
+        sessionsMonth: Number(overviewRows[0]?.sessionsMonth || 0),
+      },
+      summary: {
+        sessionsHeld: held,
+        uniquePatients: Number(summary.uniquePatients || 0),
+        completedSessions: completed,
+        activeSessions: Number(summary.activeSessions || 0),
+        notStartedSessions: Number(summary.notStartedSessions || 0),
+        averageMinutes: Number(summary.averageMinutes || 0),
+        totalMinutes: Number(summary.totalMinutes || 0),
+        completionRate: held ? Math.round((completed / held) * 1000) / 10 : 0,
+      },
+      timeSeries,
+      byProvider: providerRows.map((row) => ({
+        provider: row.provider,
+        sessionsHeld: Number(row.sessionsHeld || 0),
+      })),
+      byClinician: clinicianRows.map((row) => ({
+        doctorId: Number(row.doctorId),
+        clinicianName: row.clinicianName || `Clinician #${row.doctorId}`,
+        sessionsHeld: Number(row.sessionsHeld || 0),
+        uniquePatients: Number(row.uniquePatients || 0),
+      })),
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    if (err.code === 'ER_BAD_FIELD_ERROR') {
+      return res.status(503).json({
+        error: 'Database migration required: run api/database/migrations/67_telemedicine_metrics.sql',
+      });
+    }
+    console.error('Telemedicine analytics error:', err);
+    return res.status(500).json({ error: err.message || 'Internal error' });
+  }
+});
+
+/**
+ * GET /api/telemedicine/queue
+ * Active telemedicine queue for the caller's selected/assigned facility.
+ */
+router.get('/queue', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+
+    const branch = await resolveBranchForRequest(pool, req, { userId });
+    if (!branch?.branchId) return res.status(200).json([]);
+
+    const [rows] = await pool.execute(
+      `SELECT q.queueId, COALESCE(q.branchId, p.registeredBranchId) AS branchId,
+              q.patientId, q.doctorId, q.ticketNumber,
+              q.servicePoint, q.priority, q.status, q.estimatedWaitTime,
+              q.arrivalTime, q.calledTime, q.startTime, q.endTime,
+              q.createdAt, q.updatedAt,
+              p.firstName AS patientFirstName,
+              p.lastName AS patientLastName,
+              p.patientNumber,
+              b.branchName
+       FROM queue_entries q
+       INNER JOIN patients p ON p.patientId = q.patientId
+       LEFT JOIN branches b ON b.branchId = q.branchId
+       WHERE q.servicePoint = 'telemedicine'
+         AND q.status NOT IN ('completed', 'cancelled')
+         AND COALESCE(q.branchId, p.registeredBranchId) = ?
+         AND NOT EXISTS (
+           SELECT 1
+           FROM telemedicine_sessions activeSession
+           WHERE activeSession.queueEntryId = q.queueId
+             AND activeSession.status <> 'ended'
+         )
+       ORDER BY q.arrivalTime DESC, q.queueId DESC
+       LIMIT 200`,
+      [branch.branchId]
+    );
+
+    return res.status(200).json(rows);
+  } catch (err) {
+    console.error('Telemedicine queue error:', err);
+    return res.status(500).json({ error: err.message || 'Internal error' });
+  }
+});
+
+/** Create session — default provider is Daily.co (auto room); Zoom still supported. */
 router.post('/sessions', async (req, res) => {
   const {
     originType,
@@ -346,7 +578,7 @@ router.post('/sessions', async (req, res) => {
     forceNew,
   } = req.body || {};
 
-  let providerToStore = 'zoom_manual';
+  let providerToStore = DEFAULT_VIDEO_PROVIDER;
   const rawProvider = videoProvider != null && String(videoProvider).trim() !== '' ? videoProvider : providerBody;
   if (rawProvider != null && String(rawProvider).trim() !== '') {
     const p = String(rawProvider).trim();
@@ -377,6 +609,7 @@ router.post('/sessions', async (req, res) => {
 
   let patientId = bodyPatientId;
   let resolvedQueueEntryId = null;
+  let sourceBranchId = null;
 
   if (originType === 'queue') {
     const qid = queueEntryId != null && String(queueEntryId).trim() !== '' ? parseInt(queueEntryId, 10) : NaN;
@@ -385,7 +618,7 @@ router.post('/sessions', async (req, res) => {
     }
     try {
       const [qrows] = await pool.execute(
-        `SELECT queueId, patientId, servicePoint, status, ticketNumber
+        `SELECT queueId, patientId, servicePoint, status, ticketNumber, branchId
          FROM queue_entries WHERE queueId = ?`,
         [qid]
       );
@@ -404,6 +637,7 @@ router.post('/sessions', async (req, res) => {
       }
       patientId = q.patientId;
       resolvedQueueEntryId = qid;
+      sourceBranchId = q.branchId || null;
     } catch (qErr) {
       if (qErr.code === 'ER_BAD_FIELD_ERROR') {
         return res.status(503).json({
@@ -417,6 +651,19 @@ router.post('/sessions', async (req, res) => {
 
   const userId = getUserId(req);
   const actor = userId || null;
+  if (!sourceBranchId && originType === 'appointment' && appointmentId) {
+    const [appointmentRows] = await pool.execute(
+      `SELECT branchId FROM appointments WHERE appointmentId = ? LIMIT 1`,
+      [appointmentId]
+    );
+    sourceBranchId = appointmentRows[0]?.branchId || null;
+  }
+  const resolvedBranch = await resolveBranchForRequest(pool, req, {
+    body: req.body || {},
+    userId,
+    branchId: sourceBranchId,
+  });
+  const branchId = resolvedBranch?.branchId || sourceBranchId || null;
 
   const sessionUuid = crypto.randomUUID();
   let zUrl = normalizeMeetingUrl(zoomJoinUrl);
@@ -427,7 +674,20 @@ router.post('/sessions', async (req, res) => {
     return res.status(400).json({ error: 'Paste a Google Meet link before starting a Google Meet telemedicine session.' });
   }
 
-  // Load "My Zoom defaults" only for Zoom — other platforms paste links on the session screen.
+  // Daily: auto-create a room when no link was pasted
+  if (providerToStore === 'daily' && !zUrl) {
+    try {
+      zUrl = await ensureDailyJoinUrl({ existingUrl: null, sessionUuid });
+    } catch (dailyErr) {
+      const status = dailyErr.code === 'DAILY_NOT_CONFIGURED' ? 503 : 502;
+      return res.status(status).json({
+        error: dailyErr.message || 'Failed to create Daily.co room',
+        code: dailyErr.code || 'DAILY_CREATE_FAILED',
+      });
+    }
+  }
+
+  // Load "My Zoom defaults" only for Zoom — other platforms paste links or auto-create (Daily).
   // Try both doctorId (request) and logged-in user so defaults apply even if the client sent a mismatched id.
   if (!zUrl && providerToStore === 'zoom_manual') {
     const candidateUserIds = [];
@@ -497,22 +757,35 @@ router.post('/sessions', async (req, res) => {
         const ex = existingRows[0];
         let outUrl = ex.zoomJoinUrl;
         let outPass = ex.zoomPassword;
-        const providerChanged = providerToStore !== (ex.provider || 'zoom_manual');
+        const providerChanged = providerToStore !== (ex.provider || DEFAULT_VIDEO_PROVIDER);
         // If the clinician explicitly chooses another platform, switch the active visit instead of silently reopening Zoom.
         const existingEmpty = !ex.zoomJoinUrl || String(ex.zoomJoinUrl).trim() === '';
         if (providerChanged || (existingEmpty && zUrl)) {
+          let nextUrl = providerChanged ? zUrl : outUrl || zUrl;
+          if (providerToStore === 'daily' && !nextUrl) {
+            try {
+              nextUrl = await ensureDailyJoinUrl({ existingUrl: null, sessionUuid: ex.sessionUuid });
+            } catch (dailyErr) {
+              await connection.rollback();
+              const status = dailyErr.code === 'DAILY_NOT_CONFIGURED' ? 503 : 502;
+              return res.status(status).json({
+                error: dailyErr.message || 'Failed to create Daily.co room',
+                code: dailyErr.code || 'DAILY_CREATE_FAILED',
+              });
+            }
+          }
           await connection.execute(
             `UPDATE telemedicine_sessions
              SET provider = ?, zoomJoinUrl = ?, zoomPassword = ?, updatedAt = NOW()
              WHERE sessionId = ?`,
             [
               providerChanged ? providerToStore : ex.provider,
-              providerChanged ? zUrl : outUrl || zUrl,
+              providerChanged ? nextUrl : outUrl || nextUrl,
               providerChanged ? zPass : outPass || zPass,
               ex.sessionId,
             ]
           );
-          outUrl = providerChanged ? zUrl : outUrl || zUrl;
+          outUrl = providerChanged ? nextUrl : outUrl || nextUrl;
           outPass = providerChanged ? zPass : outPass || zPass;
           if (providerChanged) ex.provider = providerToStore;
         }
@@ -526,7 +799,41 @@ router.post('/sessions', async (req, res) => {
             : `Joined existing active visit for patient ${pid} (requesting doctorId=${doctorId}; primary doctorId=${ex.doctorId})`,
           connection
         );
+        if (branchId || resolvedQueueEntryId) {
+          await connection.execute(
+            `UPDATE telemedicine_sessions
+             SET branchId = COALESCE(branchId, ?),
+                 queueEntryId = COALESCE(queueEntryId, ?),
+                 originType = CASE
+                   WHEN ? IS NOT NULL AND originType = 'standalone' THEN 'queue'
+                   ELSE originType
+                 END
+             WHERE sessionId = ?`,
+            [branchId, resolvedQueueEntryId, resolvedQueueEntryId, ex.sessionId]
+          );
+        }
+        if (resolvedQueueEntryId) {
+          const queueStatus = ex.status === 'in_progress' || ex.status === 'recording_started'
+            ? 'serving'
+            : 'called';
+          await connection.execute(
+            `UPDATE queue_entries
+             SET status = ?,
+                 calledTime = COALESCE(calledTime, NOW()),
+                 startTime = CASE WHEN ? = 'serving' THEN COALESCE(startTime, NOW()) ELSE startTime END,
+                 updatedAt = NOW()
+             WHERE queueId = ?`,
+            [queueStatus, queueStatus, resolvedQueueEntryId]
+          );
+        }
         await connection.commit();
+
+        if (outUrl && pid) {
+          notifyTelemedicineScheduled(pid, {
+            joinUrl: outUrl,
+            sessionUuid: ex.sessionUuid,
+          });
+        }
 
         return res.status(200).json({
           sessionId: ex.sessionId,
@@ -541,7 +848,7 @@ router.post('/sessions', async (req, res) => {
       }
     }
 
-    // New Zoom visits need defaults for predictable reuse. Non-Zoom providers can be created with a pasted link or link pending.
+    // New Zoom visits need defaults. Daily auto-creates a room; Meet requires a pasted link.
     if (!userId) {
       await connection.rollback();
       return res.status(401).json({ error: 'Unauthorized' });
@@ -554,22 +861,23 @@ router.post('/sessions', async (req, res) => {
       await connection.rollback();
       return res.status(403).json({
         error:
-          'Save your meeting defaults under Telemedicine → My Zoom defaults before starting a new Zoom visit, or choose Google Meet and paste a Meet link.',
+          'Save your meeting defaults under Telemedicine → My Zoom defaults before starting a new Zoom visit, choose Daily.co (default), or paste a meeting link.',
         code: 'TELEMEDICINE_ZOOM_DEFAULTS_REQUIRED',
       });
     }
 
     const [result] = await connection.execute(
       `INSERT INTO telemedicine_sessions
-       (sessionUuid, originType, appointmentId, admissionId, queueEntryId, provider, roomName, roomUrl, zoomJoinUrl, zoomPassword,
+       (sessionUuid, originType, appointmentId, admissionId, queueEntryId, branchId, provider, roomName, roomUrl, zoomJoinUrl, zoomPassword,
         patientId, doctorId, status, recordingPolicyEnabled, notes, createdBy)
-       VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, 'created', 0, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, 'created', 0, ?, ?)`,
       [
         sessionUuid,
         originType,
         appointmentId || null,
         admissionId || null,
         resolvedQueueEntryId,
+        branchId,
         providerToStore,
         zUrl,
         zPass,
@@ -583,8 +891,23 @@ router.post('/sessions', async (req, res) => {
     const sessionId = result.insertId;
     const auditHint = zUrl ? `${providerToStore} with join URL` : `${providerToStore} (link pending)`;
     await addAudit(sessionId, 'session_created', actor, auditHint, connection);
+    if (resolvedQueueEntryId) {
+      await connection.execute(
+        `UPDATE queue_entries
+         SET status = 'called', calledTime = COALESCE(calledTime, NOW()), updatedAt = NOW()
+         WHERE queueId = ?`,
+        [resolvedQueueEntryId]
+      );
+    }
 
     await connection.commit();
+
+    if (pid) {
+      notifyTelemedicineScheduled(pid, {
+        joinUrl: zUrl || null,
+        sessionUuid,
+      });
+    }
 
     return res.status(201).json({
       sessionId,
@@ -637,7 +960,7 @@ router.patch('/sessions/:sessionId/link', async (req, res) => {
     const { zoomJoinUrl, zoomPassword, videoProvider, provider: providerBody } = req.body || {};
 
     const [rows] = await pool.execute(
-      `SELECT sessionId, doctorId, provider FROM telemedicine_sessions WHERE sessionId = ?`,
+      `SELECT sessionId, doctorId, provider, patientId, sessionUuid FROM telemedicine_sessions WHERE sessionId = ?`,
       [sessionId]
     );
     if (rows.length === 0) return res.status(404).json({ error: 'Session not found' });
@@ -662,7 +985,7 @@ router.patch('/sessions/:sessionId/link', async (req, res) => {
       providerToStore = p;
     }
 
-    const effectiveProvider = providerToStore || s.provider || 'zoom_manual';
+    const effectiveProvider = providerToStore || s.provider || DEFAULT_VIDEO_PROVIDER;
     const zUrl = zoomJoinUrl !== undefined ? normalizeMeetingUrl(zoomJoinUrl) : undefined;
     const urlError = validateMeetingUrlForProvider(effectiveProvider, zUrl);
     if (urlError) return res.status(400).json({ error: urlError });
@@ -700,6 +1023,14 @@ router.patch('/sessions/:sessionId/link', async (req, res) => {
       `SELECT sessionId, provider, zoomJoinUrl, zoomPassword, status FROM telemedicine_sessions WHERE sessionId = ?`,
       [sessionId]
     );
+
+    if (zUrl && s.patientId) {
+      notifyTelemedicineScheduled(s.patientId, {
+        joinUrl: zUrl,
+        sessionUuid: s.sessionUuid,
+      });
+    }
+
     return res.status(200).json(out[0]);
   } catch (err) {
     console.error('Telemedicine link update error:', err);
@@ -726,9 +1057,18 @@ router.get('/sessions', async (req, res) => {
 
     let where = '1=1';
     const params = [];
-    if (scopeFacility && mayViewFacilityTelemedicineBoard(roleName)) {
-      // Facility board: nurses, doctors, admins see all sessions (paginated)
-      where = '1=1';
+    if (scopeFacility) {
+      const branch = await resolveBranchForRequest(pool, req, { userId });
+      where = `(
+        ts.branchId = ?
+        OR ts.doctorId = ?
+        OR ts.createdBy = ?
+        OR EXISTS (
+          SELECT 1 FROM telemedicine_session_audit userAudit
+          WHERE userAudit.sessionId = ts.sessionId AND userAudit.actorUserId = ?
+        )
+      )`;
+      params.push(branch?.branchId || 0, userId, userId, userId);
     } else if (!isAdmin) {
       where = 'ts.doctorId = ?';
       params.push(userId);
@@ -739,6 +1079,10 @@ router.get('/sessions', async (req, res) => {
       where += ` AND ts.status <> 'ended'`;
     } else if (statusGroup === 'ended') {
       where += ` AND ts.status = 'ended'`;
+    } else if (statusGroup === 'pending') {
+      where += ` AND ts.status <> 'ended' AND ts.startedAt IS NULL`;
+    } else if (statusGroup === 'in_progress') {
+      where += ` AND ts.status IN ('in_progress', 'recording_started')`;
     }
 
     const [countRows] = await pool.execute(
@@ -758,19 +1102,25 @@ router.get('/sessions', async (req, res) => {
               ts.appointmentId,
               ts.admissionId,
               ts.queueEntryId,
+              ts.branchId,
               ts.zoomJoinUrl,
+              ts.startedAt,
+              ts.endedAt,
+              COALESCE(ts.endedAt, ts.startedAt, ts.createdAt) AS activityAt,
               ts.createdAt,
               ts.updatedAt,
               p.firstName AS patientFirstName,
               p.lastName AS patientLastName,
               p.patientNumber,
               u.firstName AS doctorFirstName,
-              u.lastName AS doctorLastName
+              u.lastName AS doctorLastName,
+              b.branchName
        FROM telemedicine_sessions ts
        INNER JOIN patients p ON ts.patientId = p.patientId
        INNER JOIN users u ON ts.doctorId = u.userId
+       LEFT JOIN branches b ON ts.branchId = b.branchId
        WHERE ${where}
-       ORDER BY ts.createdAt DESC
+       ORDER BY COALESCE(ts.endedAt, ts.startedAt, ts.createdAt) DESC, ts.sessionId DESC
        LIMIT ${limit} OFFSET ${offset}`,
       params
     );
@@ -976,7 +1326,8 @@ router.post('/sessions/:sessionId/start', async (req, res) => {
     const actorUserId = getUserId(req);
 
     const [rows] = await connection.execute(
-      `SELECT ts.sessionId, ts.status, ts.recordingConsentSatisfiedAt, ts.provider, ts.patientId
+      `SELECT ts.sessionId, ts.status, ts.recordingConsentSatisfiedAt, ts.provider,
+              ts.patientId, ts.branchId, ts.queueEntryId, ts.startedAt
        FROM telemedicine_sessions ts
        WHERE ts.sessionId = ? FOR UPDATE`,
       [sessionId]
@@ -992,6 +1343,11 @@ router.post('/sessions/:sessionId/start', async (req, res) => {
       return res.status(400).json({ error: 'Session is already ended' });
     }
 
+    if (s.startedAt || s.status === 'in_progress') {
+      await connection.commit();
+      return res.status(200).json({ ok: true, alreadyStarted: true, startedRecordingNow: false });
+    }
+
     if (!s.recordingConsentSatisfiedAt) {
       await connection.rollback();
       return res.status(400).json({ error: 'Teleconsult consent must be recorded before starting the session' });
@@ -999,32 +1355,63 @@ router.post('/sessions/:sessionId/start', async (req, res) => {
 
     await connection.execute(
       `UPDATE telemedicine_sessions
-       SET status = 'in_progress', updatedAt = NOW()
+       SET status = 'in_progress', startedAt = COALESCE(startedAt, NOW()), updatedAt = NOW()
        WHERE sessionId = ?`,
       [sessionId]
     );
-    await addAudit(sessionId, 'teleconsult_started', actorUserId, s.provider || 'zoom_manual');
+    await addAudit(sessionId, 'teleconsult_started', actorUserId, s.provider || DEFAULT_VIDEO_PROVIDER);
 
-    // Telemedicine queue: patient ready / in virtual visit (dedupe same day)
+    // Keep the telemedicine queue synchronized with the session lifecycle.
     try {
       const patientId = s.patientId;
-      const [existingTm] = await connection.execute(
-        `SELECT queueId FROM queue_entries
-         WHERE patientId = ? AND servicePoint = 'telemedicine'
-         AND DATE(arrivalTime) = CURDATE()
-         AND status NOT IN ('completed', 'cancelled')`,
-        [patientId]
-      );
-      if (existingTm.length === 0) {
+      let linkedQueueId = s.queueEntryId;
+      if (!linkedQueueId) {
+        const [existingTm] = await connection.execute(
+          `SELECT queueId FROM queue_entries
+           WHERE patientId = ? AND servicePoint = 'telemedicine'
+             AND DATE(arrivalTime) = CURDATE()
+             AND status NOT IN ('completed', 'cancelled')
+           ORDER BY arrivalTime DESC, queueId DESC
+           LIMIT 1`,
+          [patientId]
+        );
+        linkedQueueId = existingTm[0]?.queueId || null;
+      }
+
+      if (linkedQueueId) {
+        await connection.execute(
+          `UPDATE queue_entries
+           SET status = 'serving',
+               calledTime = COALESCE(calledTime, NOW()),
+               startTime = COALESCE(startTime, NOW()),
+               updatedAt = NOW()
+           WHERE queueId = ?`,
+          [linkedQueueId]
+        );
+        await connection.execute(
+          `UPDATE telemedicine_sessions
+           SET queueEntryId = COALESCE(queueEntryId, ?),
+               branchId = COALESCE(branchId, ?),
+               originType = CASE WHEN originType = 'standalone' THEN 'queue' ELSE originType END
+           WHERE sessionId = ?`,
+          [linkedQueueId, s.branchId, sessionId]
+        );
+      } else {
         const [tmCount] = await connection.execute(
           'SELECT COUNT(*) as count FROM queue_entries WHERE DATE(arrivalTime) = CURDATE() AND servicePoint = "telemedicine"'
         );
         const ticketNum = (tmCount[0]?.count || 0) + 1;
         const ticket = `TM-${String(ticketNum).padStart(3, '0')}`;
+        const [queueResult] = await connection.execute(
+          `INSERT INTO queue_entries
+             (branchId, patientId, ticketNumber, servicePoint, priority, status,
+              calledTime, startTime, notes, createdBy)
+           VALUES (?, ?, ?, 'telemedicine', 'normal', 'serving', NOW(), NOW(), ?, ?)`,
+          [s.branchId, patientId, ticket, `Telemedicine session #${sessionId}`, actorUserId || null]
+        );
         await connection.execute(
-          `INSERT INTO queue_entries (patientId, ticketNumber, servicePoint, priority, status, notes, createdBy)
-           VALUES (?, ?, 'telemedicine', 'normal', 'waiting', ?, ?)`,
-          [patientId, ticket, `Telemedicine session #${sessionId}`, actorUserId || null]
+          `UPDATE telemedicine_sessions SET queueEntryId = ? WHERE sessionId = ?`,
+          [queueResult.insertId, sessionId]
         );
       }
     } catch (tmQErr) {
@@ -1051,7 +1438,7 @@ router.post('/sessions/:sessionId/end', async (req, res) => {
     }
 
     const [rows] = await pool.execute(
-      `SELECT doctorId, status FROM telemedicine_sessions WHERE sessionId = ?`,
+      `SELECT doctorId, status, queueEntryId FROM telemedicine_sessions WHERE sessionId = ?`,
       [sessionId]
     );
     if (rows.length === 0) {
@@ -1073,7 +1460,7 @@ router.post('/sessions/:sessionId/end', async (req, res) => {
 
     await pool.execute(
       `UPDATE telemedicine_sessions
-       SET status = 'ended', updatedAt = NOW()
+       SET status = 'ended', endedAt = COALESCE(endedAt, NOW()), updatedAt = NOW()
        WHERE sessionId = ?`,
       [sessionId]
     );
@@ -1082,6 +1469,14 @@ router.post('/sessions/:sessionId/end', async (req, res) => {
        VALUES (?, 'call_ended', ?, NULL)`,
       [sessionId, actorUserId]
     );
+    if (row.queueEntryId) {
+      await pool.execute(
+        `UPDATE queue_entries
+         SET status = 'completed', endTime = COALESCE(endTime, NOW()), updatedAt = NOW()
+         WHERE queueId = ? AND servicePoint = 'telemedicine'`,
+        [row.queueEntryId]
+      );
+    }
     return res.status(200).json({ ok: true });
   } catch (err) {
     console.error('Telemedicine end error:', err);
@@ -1093,6 +1488,89 @@ router.get('/sessions/:sessionId/recording/download', async (req, res) => {
   return res.status(501).json({
     error: 'Cloud recording is not integrated in Zoom link mode. Record locally in Zoom if your policy allows.',
   });
+});
+
+/**
+ * Whether Daily.co API key is set (for auto room create + in-page embed).
+ */
+router.get('/daily-status', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+    return res.status(200).json({ configured: isDailyConfigured() });
+  } catch (err) {
+    console.error('daily-status error:', err);
+    return res.status(500).json({ error: err.message || 'Internal error' });
+  }
+});
+
+/**
+ * Ensure a Daily room URL exists on a session (create via Daily API if missing).
+ */
+router.post('/sessions/:sessionId/ensure-daily-room', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+    const { sessionId } = req.params;
+
+    const [rows] = await pool.execute(
+      `SELECT sessionId, sessionUuid, doctorId, provider, zoomJoinUrl, status, patientId
+       FROM telemedicine_sessions WHERE sessionId = ?`,
+      [sessionId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Session not found' });
+    const s = rows[0];
+
+    const roleName = await getRoleNameByUserId(userId);
+    const rn = (roleName || '').toLowerCase();
+    const isAdmin = rn === 'admin' || rn.includes('admin');
+    if (!isAdmin && Number(s.doctorId) !== Number(userId)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    if (String(s.status) === 'ended') {
+      return res.status(400).json({ error: 'Session already ended' });
+    }
+
+    let url = normalizeMeetingUrl(s.zoomJoinUrl);
+    let created = false;
+    if (!url) {
+      url = await ensureDailyJoinUrl({ existingUrl: null, sessionUuid: s.sessionUuid });
+      created = true;
+      await pool.execute(
+        `UPDATE telemedicine_sessions
+         SET provider = 'daily', zoomJoinUrl = ?, updatedAt = NOW()
+         WHERE sessionId = ?`,
+        [url, sessionId]
+      );
+      await addAudit(sessionId, 'daily_room_created', userId, url);
+      if (s.patientId) {
+        notifyTelemedicineScheduled(s.patientId, {
+          joinUrl: url,
+          sessionUuid: s.sessionUuid,
+        });
+      }
+    } else if ((s.provider || '') !== 'daily') {
+      await pool.execute(
+        `UPDATE telemedicine_sessions SET provider = 'daily', updatedAt = NOW() WHERE sessionId = ?`,
+        [sessionId]
+      );
+    }
+
+    return res.status(200).json({
+      sessionId: Number(sessionId),
+      provider: 'daily',
+      zoomJoinUrl: url,
+      created,
+    });
+  } catch (err) {
+    console.error('ensure-daily-room error:', err);
+    const status = err.code === 'DAILY_NOT_CONFIGURED' ? 503 : 502;
+    return res.status(status).json({
+      error: err.message || 'Failed to ensure Daily room',
+      code: err.code || 'DAILY_CREATE_FAILED',
+    });
+  }
 });
 
 /**
@@ -1243,7 +1721,7 @@ router.get('/sessions/:sessionId/join-url', async (req, res) => {
     return res.status(200).json({
       joinUrl: s.zoomJoinUrl,
       zoomPassword: s.zoomPassword || null,
-      provider: s.provider || 'zoom_manual',
+      provider: s.provider || DEFAULT_VIDEO_PROVIDER,
     });
   } catch (err) {
     console.error('Telemedicine join-url error:', err);

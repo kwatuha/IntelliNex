@@ -25,7 +25,7 @@ import {
   TelemedicineOptionalMeetingLinkFields,
   telemedicineOptionalLinkBody,
 } from "@/components/telemedicine-optional-meeting-link-fields"
-import { getTelemedicineProviderLabel, isZoomProvider, meetingHrefFromUrl, type TelemedicineVideoProviderId } from "@/lib/telemedicine-providers"
+import { getTelemedicineProviderLabel, isDailyProvider, isZoomProvider, providerRequiresPastedMeetingLink, meetingHrefFromUrl, type TelemedicineVideoProviderId } from "@/lib/telemedicine-providers"
 import { telemedicineCreateToast } from "@/lib/telemedicine-create-result"
 import { TelemedicineFacilityActiveVisits } from "@/components/telemedicine-facility-active-visits"
 import { TelemedicineMeetingLinkActions } from "@/components/telemedicine-meeting-link-actions"
@@ -78,11 +78,11 @@ export default function TelemedicineCreatePage() {
   const [sessionsPage, setSessionsPage] = useState(1)
   const [sessionsLoading, setSessionsLoading] = useState(false)
 
-  const [videoProvider, setVideoProvider] = useState<TelemedicineVideoProviderId>("zoom_manual")
+  const [videoProvider, setVideoProvider] = useState<TelemedicineVideoProviderId>("daily")
   const [optionalMeetingUrl, setOptionalMeetingUrl] = useState("")
   const [optionalMeetingPasscode, setOptionalMeetingPasscode] = useState("")
   const selectedProviderNeedsZoomDefaults = isZoomProvider(videoProvider) && !optionalMeetingUrl.trim()
-  const selectedProviderNeedsMeetingLink = !isZoomProvider(videoProvider) && !optionalMeetingUrl.trim()
+  const selectedProviderNeedsMeetingLink = providerRequiresPastedMeetingLink(videoProvider, optionalMeetingUrl)
   const canStartNewTelemedicineVisit =
     !selectedProviderNeedsMeetingLink &&
     (!selectedProviderNeedsZoomDefaults || (!zoomDefaultsLoading && hasZoomDefaults))
@@ -147,8 +147,8 @@ export default function TelemedicineCreatePage() {
       toast({
         title: "Meeting link required",
         description: selectedProviderNeedsMeetingLink
-          ? "Paste a Google Meet link before starting this session."
-          : "Save Telemedicine → My Zoom defaults, paste a Zoom link, or choose Google Meet and paste a Meet link.",
+          ? "Paste a Google Meet / Teams / other meeting link, or choose Daily.co (default) which creates a room automatically."
+          : "Save Telemedicine → My Zoom defaults, paste a Zoom link, or switch to Daily.co.",
         variant: "destructive",
       })
       return
@@ -194,9 +194,10 @@ export default function TelemedicineCreatePage() {
             },
       )
       if (created?.sessionId) {
-        const externalMeetingHref = !isZoomProvider(videoProvider)
-          ? meetingHrefFromUrl(created.zoomJoinUrl || optionalMeetingUrl)
-          : ""
+        const externalMeetingHref =
+          !isZoomProvider(videoProvider) && !isDailyProvider(videoProvider)
+            ? meetingHrefFromUrl(created.zoomJoinUrl || optionalMeetingUrl)
+            : ""
         const patientDisplayName =
           entry.patientFirstName && entry.patientLastName
             ? `${entry.patientFirstName} ${entry.patientLastName}`.trim()
@@ -212,9 +213,11 @@ export default function TelemedicineCreatePage() {
         toast(
           telemedicineCreateToast(created, {
             title: "Telemedicine session started",
-            description: externalMeetingHref
-              ? "Google Meet opened in a new browser tab. The HMIS session panel is also available for consent and documentation."
-              : "Use the floating panel — share the meeting link from the Sessions tab so others can join.",
+            description: isDailyProvider(videoProvider)
+              ? "Daily.co room is ready in the floating panel — join in-page video there."
+              : externalMeetingHref
+                ? "Meeting opened in a new browser tab. The HMIS session panel is also available for consent and documentation."
+                : "Use the floating panel — share the meeting link from the Sessions tab so others can join.",
           }),
         )
         setPendingQueueEntry(null)
@@ -545,7 +548,15 @@ export default function TelemedicineCreatePage() {
               onPasscodeChange={setOptionalMeetingPasscode}
             />
             {selectedProviderNeedsMeetingLink && (
-              <p className="text-sm text-destructive">Paste a Google Meet link before starting.</p>
+              <p className="text-sm text-destructive">
+                Paste a {getTelemedicineProviderLabel(videoProvider)} link before starting.
+              </p>
+            )}
+            {isDailyProvider(videoProvider) && !optionalMeetingUrl.trim() && (
+              <p className="text-sm text-muted-foreground">
+                A Daily.co room will be created automatically when the session starts (requires{" "}
+                <code className="text-xs">DAILY_API_KEY</code> on the API).
+              </p>
             )}
           </div>
           <DialogFooter>
@@ -557,12 +568,14 @@ export default function TelemedicineCreatePage() {
               onClick={() => {
                 if (!pendingQueueEntry) return
                 const meetWindow =
-                  !isZoomProvider(videoProvider) && optionalMeetingUrl.trim()
+                  !isZoomProvider(videoProvider) &&
+                  !isDailyProvider(videoProvider) &&
+                  optionalMeetingUrl.trim()
                     ? window.open("about:blank", "_blank")
                     : null
                 if (meetWindow) {
-                  meetWindow.document.title = "Opening Google Meet..."
-                  meetWindow.document.body.innerHTML = "Opening Google Meet..."
+                  meetWindow.document.title = "Opening meeting..."
+                  meetWindow.document.body.innerHTML = "Opening meeting..."
                 }
                 void handleStartFromQueueRow(pendingQueueEntry, meetWindow)
               }}

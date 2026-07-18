@@ -16,14 +16,15 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
-import { billingApi, ledgerApi, queueApi } from "@/lib/api"
-import { Loader2, Receipt, DollarSign, AlertCircle, Printer, Download } from "lucide-react"
+import { billingApi, ledgerApi, queueApi, patientApi } from "@/lib/api"
+import { Loader2, Receipt, DollarSign, AlertCircle, Printer, Download, Smartphone } from "lucide-react"
 import { formatDate } from "@/lib/date-utils"
 import { toast } from "@/components/ui/use-toast"
 import { useAuth } from "@/lib/auth/auth-context"
 import { format } from "date-fns"
 import { PaymentReceiptDialog } from "@/components/payment-receipt-dialog"
 import { GroupedPaymentReceiptDialog } from "@/components/grouped-payment-receipt-dialog"
+import { pollMpesaStkStatus, startMpesaStkPayment } from "@/lib/mpesa-stk"
 
 interface ViewBillDialogProps {
   open: boolean
@@ -48,6 +49,9 @@ export function ViewBillDialog({ open, onOpenChange, patientId, queueId, queueNo
   const [groupedReceiptOpen, setGroupedReceiptOpen] = useState(false)
   const [selectedInvoiceIdForReceipt, setSelectedInvoiceIdForReceipt] = useState<string | null>(null)
   const [selectedBatchReceiptNumber, setSelectedBatchReceiptNumber] = useState<string | null>(null)
+  const [mpesaPhone, setMpesaPhone] = useState("")
+  const [stkWaiting, setStkWaiting] = useState(false)
+  const [stkMessage, setStkMessage] = useState<string | null>(null)
   const { user } = useAuth()
 
   const paymentMethods = [
@@ -75,6 +79,14 @@ export function ViewBillDialog({ open, onOpenChange, patientId, queueId, queueNo
       setPaymentMethod("cash")
       setPaymentReference("")
       setShowPaymentSection(false)
+      setStkWaiting(false)
+      setStkMessage(null)
+      void patientApi
+        .getById(patientId.toString())
+        .then((p) => {
+          if (p?.phone) setMpesaPhone(String(p.phone))
+        })
+        .catch(() => {})
     }
   }, [open, patientId])
 
@@ -222,6 +234,128 @@ export function ViewBillDialog({ open, onOpenChange, patientId, queueId, queueNo
         description: `Payment amount (${formatCurrency(totalPayment)}) exceeds selected invoices total (${formatCurrency(totalSelected)})`,
         variant: "destructive",
       })
+      return
+    }
+
+    // M-Pesa STK: send prompt, wait for callback, invoices update automatically
+    if (paymentMethod === "mpesa") {
+      if (!mpesaPhone.trim()) {
+        toast({
+          title: "Phone required",
+          description: "Enter the Safaricom number that will receive the M-Pesa prompt",
+          variant: "destructive",
+        })
+        return
+      }
+      try {
+        setProcessingPayment(true)
+        setStkWaiting(true)
+        setStkMessage("Sending M-Pesa prompt…")
+
+        const batchReceiptNumber =
+          selected.length > 1
+            ? `BATCH-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`
+            : null
+
+        const allocations = selected
+          .map((inv) => ({
+            invoiceId: inv.invoiceId,
+            amount: paymentDistribution[inv.invoiceId] || 0,
+            invoiceNumber: inv.invoiceNumber,
+          }))
+          .filter((a) => a.amount > 0)
+
+        const { checkoutRequestId, message } = await startMpesaStkPayment({
+          amount: totalPayment,
+          phone: mpesaPhone.trim(),
+          patientId,
+          allocations,
+          batchReceiptNumber: batchReceiptNumber || undefined,
+        })
+
+        setStkMessage(message || "Prompt sent. Waiting for the customer to enter their M-Pesa PIN…")
+
+        const result = await pollMpesaStkStatus(checkoutRequestId, {
+          onTick: (s) => {
+            if (s.status === "pending") {
+              setStkMessage("Waiting for M-Pesa confirmation on the phone…")
+            }
+          },
+        })
+
+        if (result.status === "failed") {
+          toast({
+            title: "M-Pesa payment failed",
+            description: result.resultDesc || "Customer cancelled or payment was not completed",
+            variant: "destructive",
+          })
+          return
+        }
+
+        const receipt = result.mpesaReceiptNumber || paymentReference
+        toast({
+          title: "M-Pesa payment received",
+          description: receipt
+            ? `Receipt ${receipt}. Invoice(s) updated.`
+            : "Payment confirmed and invoices updated.",
+        })
+
+        // Optional ledger entries (same as cash path)
+        try {
+          const accounts = await ledgerApi.getAccounts()
+          const cashAccount = accounts.find(
+            (acc: any) =>
+              acc.accountType === "Asset" &&
+              (acc.accountName.toLowerCase().includes("cash") ||
+                acc.accountCode?.toLowerCase().includes("cash") ||
+                acc.accountName.toLowerCase().includes("mpesa") ||
+                acc.accountName.toLowerCase().includes("mobile"))
+          )
+          const receivableAccount = accounts.find(
+            (acc: any) =>
+              acc.accountType === "Asset" &&
+              (acc.accountName.toLowerCase().includes("receivable") ||
+                acc.accountCode?.toLowerCase().includes("receivable"))
+          )
+          if (cashAccount && receivableAccount) {
+            for (const a of allocations) {
+              await ledgerApi.createTransaction({
+                transactionDate: format(new Date(), "yyyy-MM-dd"),
+                description: `M-Pesa payment for Invoice ${a.invoiceNumber || a.invoiceId}`,
+                referenceNumber: String(receipt || a.invoiceNumber || a.invoiceId),
+                referenceType: "payment",
+                debitAccountId: cashAccount.accountId,
+                creditAccountId: receivableAccount.accountId,
+                amount: a.amount,
+                notes: `M-Pesa STK ${checkoutRequestId}`,
+                postedBy: user?.id || undefined,
+              }).catch(() => {})
+            }
+          }
+        } catch {
+          /* journal optional */
+        }
+
+        await loadPendingInvoices()
+        if (batchReceiptNumber && selected.length > 1) {
+          setSelectedBatchReceiptNumber(batchReceiptNumber)
+          setGroupedReceiptOpen(true)
+        } else if (allocations.length === 1) {
+          setSelectedInvoiceIdForReceipt(String(allocations[0].invoiceId))
+          setReceiptDialogOpen(true)
+        }
+        onQueueCompleted?.()
+      } catch (err: any) {
+        toast({
+          title: "M-Pesa STK failed",
+          description: err.message || "Could not complete M-Pesa payment",
+          variant: "destructive",
+        })
+      } finally {
+        setProcessingPayment(false)
+        setStkWaiting(false)
+        setStkMessage(null)
+      }
       return
     }
 
@@ -758,8 +892,37 @@ export function ViewBillDialog({ open, onOpenChange, patientId, queueId, queueNo
                     value={paymentReference}
                     onChange={(e) => setPaymentReference(e.target.value)}
                     placeholder="Receipt number, transaction ID, etc."
+                    disabled={paymentMethod === "mpesa"}
                   />
+                  {paymentMethod === "mpesa" && (
+                    <p className="text-xs text-muted-foreground">
+                      M-Pesa receipt is filled automatically after the customer pays.
+                    </p>
+                  )}
                 </div>
+
+                {paymentMethod === "mpesa" && (
+                  <div className="space-y-2">
+                    <Label htmlFor="mpesaPhone">M-Pesa phone number *</Label>
+                    <Input
+                      id="mpesaPhone"
+                      value={mpesaPhone}
+                      onChange={(e) => setMpesaPhone(e.target.value)}
+                      placeholder="07XXXXXXXX or 2547XXXXXXXX"
+                      disabled={processingPayment}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      An STK prompt will be sent to this Safaricom number. Do not record the payment until the
+                      customer completes the PIN prompt.
+                    </p>
+                    {stkMessage && (
+                      <div className="flex items-start gap-2 p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-md">
+                        <Smartphone className="h-4 w-4 text-emerald-700 mt-0.5 shrink-0" />
+                        <p className="text-sm text-emerald-900 dark:text-emerald-100">{stkMessage}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {selectedInvoices.size > 0 && Object.keys(paymentDistribution).length > 0 && (
                   <div className="border-t pt-4 space-y-2">
@@ -821,13 +984,19 @@ export function ViewBillDialog({ open, onOpenChange, patientId, queueId, queueNo
                       processingPayment ||
                       selectedInvoices.size === 0 ||
                       !paymentAmount ||
-                      parseFloat(paymentAmount) <= 0
+                      parseFloat(paymentAmount) <= 0 ||
+                      (paymentMethod === "mpesa" && !mpesaPhone.trim())
                     }
                   >
                     {processingPayment ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Processing...
+                        {stkWaiting ? "Waiting for M-Pesa…" : "Processing..."}
+                      </>
+                    ) : paymentMethod === "mpesa" ? (
+                      <>
+                        <Smartphone className="mr-2 h-4 w-4" />
+                        Send M-Pesa Prompt
                       </>
                     ) : (
                       <>

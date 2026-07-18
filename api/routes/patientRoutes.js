@@ -10,11 +10,17 @@ const { resolveRegistrationFeeAmount } = require('../utils/registrationFee');
  */
 router.get('/', async (req, res) => {
     try {
-        const { search, page = 1, limit = 50 } = req.query;
-        const offset = (page - 1) * limit;
+        const { search, page = 1, limit = 25 } = req.query;
+        const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
+        const limitNum = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 25));
+        const offset = (pageNum - 1) * limitNum;
 
+        // Prefer columns used by the list UI over SELECT *
         let query = `
-            SELECT * FROM patients
+            SELECT patientId, patientNumber, firstName, lastName, middleName,
+                   dateOfBirth, gender, phone, email, address, county, subcounty, ward,
+                   idNumber, idType, bloodGroup, createdAt, patientType
+            FROM patients
             WHERE voided = 0
         `;
         const params = [];
@@ -29,7 +35,7 @@ router.get('/', async (req, res) => {
             params.push(searchTerm, searchTerm, searchTerm, searchTerm, compactSearchTerm, searchTerm, searchTerm, searchTerm);
         }
 
-        query += ` ORDER BY createdAt DESC LIMIT ${parseInt(limit)} OFFSET ${parseInt(offset)}`;
+        query += ` ORDER BY createdAt DESC LIMIT ${limitNum} OFFSET ${offset}`;
 
         const [rows] = await pool.execute(query, params);
         res.status(200).json(rows);
@@ -110,14 +116,23 @@ router.post('/', async (req, res) => {
             patientData.patientNumber = `P-${String(count[0].count + 1).padStart(6, '0')}`;
         }
 
+        // Stamp registration facility from request body or X-Branch-Id header (multi-facility).
+        let registeredBranchId =
+            Number(patientData.registeredBranchId || patientData.branchId || patientData.currentBranchId) || null;
+        if (!registeredBranchId) {
+            const headerBranch = Number(req.headers['x-branch-id']);
+            if (Number.isFinite(headerBranch) && headerBranch > 0) registeredBranchId = headerBranch;
+        }
+
         const [result] = await connection.execute(
             `INSERT INTO patients (
-                patientNumber, firstName, lastName, middleName, dateOfBirth, gender, patientType, insuranceCompanyId, insuranceNumber,
+                registeredBranchId, patientNumber, firstName, lastName, middleName, dateOfBirth, gender, patientType, insuranceCompanyId, insuranceNumber,
                 phone, email, address, county, subcounty, ward, idNumber, idType,
                 nextOfKinName, nextOfKinPhone, nextOfKinRelationship,
                 bloodGroup, allergies, medicalHistory, createdBy, voided
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
             [
+                registeredBranchId,
                 patientData.patientNumber || null,
                 patientData.firstName,
                 patientData.lastName,

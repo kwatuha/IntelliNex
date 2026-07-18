@@ -8,8 +8,8 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { Search, Plus, Download, Loader2, MoreVertical, Eye, DollarSign, Trash2, FileText, Printer } from "lucide-react"
-import { billingApi } from "@/lib/api"
+import { Search, Plus, Download, Loader2, MoreVertical, Eye, DollarSign, Trash2, FileText, Printer, Smartphone } from "lucide-react"
+import { billingApi, patientApi } from "@/lib/api"
 import { toast } from "@/components/ui/use-toast"
 import {
   DropdownMenu,
@@ -43,6 +43,7 @@ import { MobilePaymentLogsSection } from "@/components/mobile-payment-logs-secti
 import { PaymentReceiptDialog } from "@/components/payment-receipt-dialog"
 import { GroupedPaymentReceiptDialog } from "@/components/grouped-payment-receipt-dialog"
 import { InvoiceDetailsDialog } from "@/components/invoice-details-dialog"
+import { pollMpesaStkStatus, startMpesaStkPayment } from "@/lib/mpesa-stk"
 
 export default function BillingPage() {
   const searchParams = useSearchParams()
@@ -61,6 +62,8 @@ export default function BillingPage() {
   const [paymentDate, setPaymentDate] = useState(format(new Date(), "yyyy-MM-dd"))
   const [paymentMethod, setPaymentMethod] = useState("cash")
   const [paymentReference, setPaymentReference] = useState("")
+  const [mpesaPhone, setMpesaPhone] = useState("")
+  const [stkMessage, setStkMessage] = useState<string | null>(null)
   const [recordingPayment, setRecordingPayment] = useState(false)
   const [stats, setStats] = useState<any>(null)
   const [statsLoading, setStatsLoading] = useState(true)
@@ -228,7 +231,19 @@ export default function BillingPage() {
     setPaymentDate(format(new Date(), "yyyy-MM-dd"))
     setPaymentMethod("cash")
     setPaymentReference("")
+    setMpesaPhone("")
+    setStkMessage(null)
     setPaymentDialogOpen(true)
+    if (invoice.patientId) {
+      void patientApi
+        .getById(String(invoice.patientId))
+        .then((p) => {
+          if (p?.phone) setMpesaPhone(String(p.phone))
+        })
+        .catch(() => {})
+    } else if (invoice.patientPhone) {
+      setMpesaPhone(String(invoice.patientPhone))
+    }
   }
 
   const handleRecordPayment = async () => {
@@ -238,6 +253,68 @@ export default function BillingPage() {
         description: "Please enter a valid payment amount",
         variant: "destructive",
       })
+      return
+    }
+
+    if (paymentMethod === "mpesa") {
+      if (!mpesaPhone.trim()) {
+        toast({
+          title: "Phone required",
+          description: "Enter the Safaricom number for the STK prompt",
+          variant: "destructive",
+        })
+        return
+      }
+      try {
+        setRecordingPayment(true)
+        setStkMessage("Sending M-Pesa prompt…")
+        const amount = parseFloat(paymentAmount)
+        const { checkoutRequestId, message } = await startMpesaStkPayment({
+          amount,
+          phone: mpesaPhone.trim(),
+          patientId: selectedInvoice.patientId,
+          allocations: [
+            {
+              invoiceId: selectedInvoice.invoiceId,
+              amount,
+              invoiceNumber: selectedInvoice.invoiceNumber,
+            },
+          ],
+        })
+        setStkMessage(message || "Waiting for the customer to enter their M-Pesa PIN…")
+        const result = await pollMpesaStkStatus(checkoutRequestId, {
+          onTick: (s) => {
+            if (s.status === "pending") setStkMessage("Waiting for M-Pesa confirmation…")
+          },
+        })
+        if (result.status === "failed") {
+          toast({
+            title: "M-Pesa payment failed",
+            description: result.resultDesc || "Payment was not completed",
+            variant: "destructive",
+          })
+          return
+        }
+        toast({
+          title: "M-Pesa payment received",
+          description: result.mpesaReceiptNumber
+            ? `Receipt ${result.mpesaReceiptNumber}`
+            : "Payment confirmed",
+        })
+        setPaymentDialogOpen(false)
+        setSelectedInvoice(null)
+        loadInvoices()
+        loadStats()
+      } catch (error: any) {
+        toast({
+          title: "M-Pesa STK failed",
+          description: error.message || "Failed to complete M-Pesa payment",
+          variant: "destructive",
+        })
+      } finally {
+        setRecordingPayment(false)
+        setStkMessage(null)
+      }
       return
     }
 
@@ -821,18 +898,50 @@ export default function BillingPage() {
                 value={paymentReference}
                 onChange={(e) => setPaymentReference(e.target.value)}
                 placeholder="Optional reference number"
+                disabled={paymentMethod === "mpesa"}
               />
             </div>
+            {paymentMethod === "mpesa" && (
+              <div className="space-y-2">
+                <Label htmlFor="mpesaPhone">M-Pesa phone *</Label>
+                <Input
+                  id="mpesaPhone"
+                  value={mpesaPhone}
+                  onChange={(e) => setMpesaPhone(e.target.value)}
+                  placeholder="07XXXXXXXX"
+                  disabled={recordingPayment}
+                />
+                {stkMessage && (
+                  <p className="text-sm text-muted-foreground flex items-center gap-2">
+                    <Smartphone className="h-4 w-4" />
+                    {stkMessage}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPaymentDialogOpen(false)} disabled={recordingPayment}>
               Cancel
             </Button>
-            <Button onClick={handleRecordPayment} disabled={recordingPayment || !paymentAmount || parseFloat(paymentAmount) <= 0}>
+            <Button
+              onClick={handleRecordPayment}
+              disabled={
+                recordingPayment ||
+                !paymentAmount ||
+                parseFloat(paymentAmount) <= 0 ||
+                (paymentMethod === "mpesa" && !mpesaPhone.trim())
+              }
+            >
               {recordingPayment ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Recording...
+                  {paymentMethod === "mpesa" ? "Waiting for M-Pesa…" : "Recording..."}
+                </>
+              ) : paymentMethod === "mpesa" ? (
+                <>
+                  <Smartphone className="mr-2 h-4 w-4" />
+                  Send M-Pesa Prompt
                 </>
               ) : (
                 "Record Payment"

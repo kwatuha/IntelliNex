@@ -7,12 +7,15 @@ const __dirname = path.dirname(__filename);
 /** Must match `basePath` — exposed to the client for root-relative public/ URLs (e.g. `/hmis/vendor/...`). */
 const BASE_PATH = '/hmis'
 
+const isProdBuild = process.env.NODE_ENV === 'production'
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Static export: `npm run build` or `npm run build:hmis-static` → upload **everything** under `out/` into `public_html/hmis/`.
-  // Do NOT set distDir to `out`: Next uses `out/` for export output; distDir must stay the default `.next` or export layout breaks (out/hmis missing, `next start` fails in Docker).
+  // Static export for production builds only (`npm run build` → `out/` → `public_html/hmis/`).
+  // Disabled in `next dev` so dynamic routes (e.g. /patients/226) work without listing every id in generateStaticParams.
+  // Do NOT set distDir to `out`: Next uses `out/` for export output; distDir must stay the default `.next` or export layout breaks.
   // Env: see `.env.example` (NEXT_PUBLIC_API_URL, NEXT_PUBLIC_BASE_URL). API CORS: `deploy/env.api-server.example` → `.env.api-server`.
-  output: 'export',
+  ...(isProdBuild ? { output: 'export' } : {}),
   basePath: BASE_PATH,
   env: {
     NEXT_PUBLIC_BASE_PATH: BASE_PATH,

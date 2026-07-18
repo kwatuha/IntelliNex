@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -54,29 +54,39 @@ export default function PatientsPage() {
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [addingToTriage, setAddingToTriage] = useState<number | null>(null)
   const [patientPendingTriage, setPatientPendingTriage] = useState<Patient | null>(null)
+  const requestIdRef = useRef(0)
 
-  useEffect(() => {
-    // Debounce search to avoid too many API calls
-    const timer = setTimeout(() => {
-      loadPatients()
-    }, 300) // Wait 300ms after user stops typing
-
-    return () => clearTimeout(timer)
-  }, [searchQuery])
-
-  const loadPatients = async () => {
+  const loadPatients = useCallback(async (query: string) => {
+    const requestId = ++requestIdRef.current
     try {
       setLoading(true)
       setError(null)
-      const data = await patientApi.getAll(searchQuery || undefined)
+      const data = await patientApi.getAll(query || undefined, 1, 25)
+      if (requestId !== requestIdRef.current) return
       setPatients(data)
     } catch (err: any) {
-      setError(err.message || 'Failed to load patients')
+      if (requestId !== requestIdRef.current) return
+      // Keep prior rows on transient network blips; only show full error when empty
+      const message = err?.message || 'Failed to load patients'
+      setError(message)
       console.error('Error loading patients:', err)
     } finally {
-      setLoading(false)
+      if (requestId === requestIdRef.current) {
+        setLoading(false)
+      }
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    // Immediate load for first paint / empty search; debounce only while typing
+    const delay = searchQuery ? 300 : 0
+    const timer = setTimeout(() => {
+      void loadPatients(searchQuery)
+    }, delay)
+    return () => {
+      clearTimeout(timer)
+    }
+  }, [searchQuery, loadPatients])
 
   const handleCreate = () => {
     setEditingPatient(null)
@@ -95,7 +105,7 @@ export default function PatientsPage() {
     try {
       await patientApi.delete(deletingPatient.patientId.toString())
       setDeletingPatient(null)
-      loadPatients() // Reload the list
+      loadPatients(searchQuery) // Reload the list
     } catch (err: any) {
       setError(err.message || 'Failed to delete patient')
       console.error('Error deleting patient:', err)
@@ -177,14 +187,14 @@ export default function PatientsPage() {
     setPatientPendingTriage(null)
   }
 
-  if (loading) {
+  if (loading && patients.length === 0) {
     return (
       <div className="flex flex-col gap-4">
         <div>
           <h1 className="text-xl font-bold tracking-tight">Patients</h1>
           <p className="text-sm text-muted-foreground">View and manage patient records</p>
         </div>
-        <div className="text-center py-8">Loading patients...</div>
+        <div className="text-center py-8 text-muted-foreground">Loading patients...</div>
       </div>
     )
   }
@@ -197,7 +207,7 @@ export default function PatientsPage() {
           <p className="text-sm text-muted-foreground">View and manage patient records</p>
         </div>
         <div className="text-center py-8 text-red-500">Error: {error}</div>
-        <Button onClick={loadPatients}>Retry</Button>
+        <Button onClick={() => loadPatients(searchQuery)}>Retry</Button>
       </div>
     )
   }
@@ -214,6 +224,15 @@ export default function PatientsPage() {
           Add Patient
         </Button>
       </div>
+
+      {error && patients.length > 0 && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+          Could not refresh list ({error}). Showing last loaded results.{" "}
+          <button type="button" className="underline" onClick={() => loadPatients(searchQuery)}>
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="relative">
         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />

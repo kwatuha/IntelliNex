@@ -89,13 +89,11 @@ transelgon/
 5. **Logout**: Users can logout via the header dropdown menu
 
 ## Future Enhancements
-
-- [ ] Server-side authentication with JWT
-- [ ] Database integration
+- [x] Mobile companion (IntelliNex Field) — see `mobile-collector/` (forms, chemist dispense POC, asset verify, offline outbox)
+- [ ] SQLite + NetInfo auto-sync on Field app
+- [ ] QR / pickup-code scanning
 - [ ] Real-time notifications
-- [ ] Advanced reporting
-- [ ] Mobile app support
-- [ ] API endpoints for external integrations
+- [ ] Advanced analytics and reporting
 
 ## Technologies Used
 

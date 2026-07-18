@@ -1,10 +1,11 @@
 "use client"
 
 import { useNavigation } from "@/lib/navigation-context"
-import { SidebarProvider } from "@/components/ui/sidebar"
+import { SidebarProvider, useSidebar } from "@/components/ui/sidebar"
 import { AppSidebar } from "@/components/app-sidebar"
 import { Header } from "@/components/header"
 import { TopNavigation } from "@/components/top-navigation"
+import { CategoryLinksBar } from "@/components/category-links-bar"
 import { CriticalNotificationsProvider } from "@/lib/critical-notifications-context"
 import { Toaster } from "@/components/ui/toaster"
 import { TelemedicineFloatingProvider, useTelemedicineFloating } from "@/lib/telemedicine-floating-context"
@@ -16,13 +17,15 @@ interface MainLayoutContentProps {
 }
 
 /**
- * While the telemedicine dock is open (not minimized), hide the fixed sidebar and drop `ml-64`
+ * While the telemedicine dock is open (not minimized), hide the fixed sidebar and drop left margin
  * so the encounter + video dock can use the full viewport width. Minimize or close telemedicine
- * to bring the sidebar back.
+ * to bring the sidebar back. On mobile the sidebar is off-canvas (no content offset). On desktop
+ * margin follows collapsed (ml-16) vs expanded (ml-64) nav.
  */
 function MainLayoutShell({ children }: { children: React.ReactNode }) {
   const { activeCategory, setActiveCategory } = useNavigation()
   const { sessionId, minimized } = useTelemedicineFloating()
+  const { isCollapsed } = useSidebar()
   const telemedicineDockExpanded = Boolean(sessionId && !minimized)
 
   return (
@@ -31,12 +34,14 @@ function MainLayoutShell({ children }: { children: React.ReactNode }) {
       <div
         className={cn(
           "flex min-w-0 flex-1 flex-col overflow-hidden transition-[margin] duration-200 ease-out",
-          telemedicineDockExpanded ? "ml-0" : "ml-64",
+          // Mobile always full-width; desktop follows collapse via md: breakpoints
+          telemedicineDockExpanded ? "ml-0" : isCollapsed ? "ml-0 md:ml-16" : "ml-0 md:ml-64",
         )}
       >
         <Header />
         <TopNavigation activeCategory={activeCategory} onCategoryChange={setActiveCategory} />
-        <main className="flex-1 overflow-auto p-6">{children}</main>
+        <CategoryLinksBar />
+        <main className="flex-1 overflow-auto p-4 sm:p-6">{children}</main>
       </div>
     </div>
   )

@@ -3,6 +3,7 @@
 import { ModeToggle } from "@/components/mode-toggle"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Search, LogOut, Building2, Store } from "lucide-react"
 import { BreadcrumbsEnhanced } from "@/components/breadcrumbs-enhanced"
 import { CriticalAlertsHeaderBadge } from "@/components/critical-alerts-header-badge"
@@ -19,8 +20,9 @@ export const Header = memo(function Header() {
   const canSwitchBranch = accessibleBranches.length > 1
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <header className="sticky top-0 z-[60] flex h-16 items-center justify-between border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="flex items-center gap-4">
+        <SidebarTrigger />
         <BreadcrumbsEnhanced />
         <div className="relative hidden lg:flex ml-4">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />

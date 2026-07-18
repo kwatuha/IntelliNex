@@ -17,6 +17,7 @@ const laboratoryRoutes = require('./routes/laboratoryRoutes');
 const radiologyRoutes = require('./routes/radiologyRoutes');
 const departmentRoutes = require('./routes/departmentRoutes');
 const patientAllergiesRoutes = require('./routes/patientAllergiesRoutes');
+const patientNcdRoutes = require('./routes/patientNcdRoutes');
 const patientFamilyHistoryRoutes = require('./routes/patientFamilyHistoryRoutes');
 const patientDocumentsRoutes = require('./routes/patientDocumentsRoutes');
 const clinicalServicesRoutes = require('./routes/clinicalServicesRoutes');
@@ -58,6 +59,8 @@ const proceduresRoutes = require('./routes/proceduresRoutes');
 const ambulanceRoutes = require('./routes/ambulanceRoutes');
 const waiverRoutes = require('./routes/waiverRoutes');
 const mohReportsRoutes = require('./routes/mohReportsRoutes');
+const dataCollectionRoutes = require('./routes/dataCollectionRoutes');
+const mobileAppRoutes = require('./routes/mobileAppRoutes');
 const telemedicineRoutes = require('./routes/telemedicineRoutes');
 
 const authenticate = require('./middleware/authenticate');
@@ -182,6 +185,7 @@ app.use('/api/employees', employeePayrollRoutes);
 app.use('/api/employees', employeePromotionRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/patients', patientAllergiesRoutes);
+app.use('/api/patients', patientNcdRoutes);
 app.use('/api/patients', patientFamilyHistoryRoutes);
 app.use('/api/patients', patientDocumentsRoutes);
 app.use('/api/clinical-services', clinicalServicesRoutes);
@@ -192,6 +196,8 @@ app.use('/api/procedures', proceduresRoutes);
 app.use('/api/ambulance', ambulanceRoutes);
 app.use('/api/waivers', waiverRoutes);
 app.use('/api/moh-reports', mohReportsRoutes);
+app.use('/api/data-collection', dataCollectionRoutes);
+app.use('/api/mobile-app', mobileAppRoutes);
 app.use('/api/ledger', ledgerRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/procurement/purchase-orders', purchaseOrderRoutes);
@@ -221,6 +227,52 @@ app.use((req, res) => {
 app.listen(port, () => {
     console.log(`${appName} API server running on port ${port}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+
+    // Advanta SMS health check (non-blocking)
+    try {
+        const { isAdvantaConfigured, getAdvantaBalance } = require('./lib/advantaSms');
+        if (isAdvantaConfigured()) {
+            getAdvantaBalance()
+                .then((bal) => {
+                    console.log('[advantaSms] configured; balance response:', JSON.stringify(bal));
+                })
+                .catch((err) => {
+                    console.warn('[advantaSms] configured but balance check failed:', err.message || err);
+                });
+        } else {
+            console.log('[advantaSms] not configured (set ADVANTA_API_KEY, ADVANTA_PARTNER_ID, ADVANTA_SHORT_CODE)');
+        }
+    } catch (err) {
+        console.warn('[advantaSms] startup check skipped:', err.message || err);
+    }
+
+    try {
+        const { isDailyConfigured, getDailyDomain } = require('./lib/dailyVideo');
+        if (isDailyConfigured()) {
+            getDailyDomain()
+                .then((dom) => {
+                    console.log('[dailyVideo] configured; domain:', dom?.domain_name || dom?.name || JSON.stringify(dom).slice(0, 120));
+                })
+                .catch((err) => {
+                    console.warn('[dailyVideo] configured but domain check failed:', err.message || err);
+                });
+        } else {
+            console.log('[dailyVideo] not configured (set DAILY_API_KEY for default telemedicine rooms)');
+        }
+    } catch (err) {
+        console.warn('[dailyVideo] startup check skipped:', err.message || err);
+    }
+    try {
+        const { isMpesaConfigured, getCallbackUrl } = require('./lib/mpesaStk');
+        if (isMpesaConfigured()) {
+            const cb = getCallbackUrl();
+            console.log('[mpesaStk] configured; callback:', cb || '(set MPESA_CALLBACK_URL)');
+        } else {
+            console.log('[mpesaStk] not configured (set CLOUD_SASA_CLIENT_ID + CLOUD_SASA_CLIENT_SECRET)');
+        }
+    } catch (err) {
+        console.warn('[mpesaStk] startup check skipped:', err.message || err);
+    }
 });
 
 module.exports = app;

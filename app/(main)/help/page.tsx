@@ -23,13 +23,22 @@ import {
   UserCheck,
   Stethoscope,
   Video,
+  Building2,
+  BarChart3,
+  Store,
+  ArrowLeftRight,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { branding } from "@/lib/branding"
 
 function HelpPageContent() {
   const searchParams = useSearchParams()
-  const initialTab = searchParams.get("tab") === "telemedicine" ? "telemedicine" : "workflows"
+  const requestedTab = searchParams.get("tab")
+  const initialTab = ["workflows", "modules", "telemedicine", "multi-facility", "quick-start", "faq"].includes(
+    requestedTab || ""
+  )
+    ? requestedTab!
+    : "workflows"
 
   return (
     <div className="flex flex-col gap-6">
@@ -41,12 +50,16 @@ function HelpPageContent() {
       </div>
 
       <Tabs defaultValue={initialTab} className="w-full">
-        <TabsList className="flex w-full flex-wrap gap-1 h-auto min-h-10 justify-start sm:grid sm:grid-cols-5">
+        <TabsList className="flex w-full flex-wrap gap-1 h-auto min-h-10 justify-start sm:grid sm:grid-cols-6">
           <TabsTrigger value="workflows">Workflows</TabsTrigger>
           <TabsTrigger value="modules">Modules</TabsTrigger>
           <TabsTrigger value="telemedicine" className="gap-1.5">
             <Video className="h-3.5 w-3.5" />
             Telemedicine
+          </TabsTrigger>
+          <TabsTrigger value="multi-facility" className="gap-1.5">
+            <Building2 className="h-3.5 w-3.5" />
+            Multi-facility
           </TabsTrigger>
           <TabsTrigger value="quick-start">Quick Start</TabsTrigger>
           <TabsTrigger value="faq">FAQ</TabsTrigger>
@@ -129,6 +142,115 @@ function HelpPageContent() {
                   Save your usual Zoom join link (e.g. Personal Meeting link). New sessions can copy these automatically; you can still change
                   per visit. Stored for clinical use—use a link you are allowed to share for patient care.
                 </p>
+              </section>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="multi-facility" className="space-y-6 mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Building2 className="h-5 w-5" />
+                Multi-facility and hospital branch support
+              </CardTitle>
+              <CardDescription>
+                Operate several hospitals, clinics or branches in one system while retaining a clear facility
+                identity for patients, clinical activity, finance and stock.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6 text-sm leading-relaxed">
+              <section className="space-y-2">
+                <h3 className="font-semibold text-base text-foreground">Selecting the working facility</h3>
+                <p className="text-muted-foreground">
+                  Use the <strong>branch selector in the header</strong> to choose the facility where you are
+                  currently working. Staff assigned to one facility use their assigned branch automatically.
+                  Administrators and authorised regional users can switch between all facilities available to
+                  their account.
+                </p>
+              </section>
+
+              <section className="space-y-2">
+                <h3 className="font-semibold text-base text-foreground">How activity is attributed</h3>
+                <p className="text-muted-foreground">
+                  Register patients and perform operational work after selecting the correct branch. The system
+                  associates facility context with patient registration, queues, appointments, consultations,
+                  prescriptions, laboratory and radiology orders, invoices, payments and pharmacy inventory.
+                  This identifies both where a patient entered the network and where care or financial activity
+                  occurred.
+                </p>
+                <div className="rounded-md border bg-muted/40 p-3 text-muted-foreground">
+                  A patient may be registered at one branch and later receive services at another. Registration
+                  remains associated with the originating facility, while each new operational record is
+                  attributed to the facility handling that activity.
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <h3 className="font-semibold text-base text-foreground flex items-center gap-2">
+                  <BarChart3 className="h-4 w-4" />
+                  Monitoring performance across facilities
+                </h3>
+                <p className="text-muted-foreground">
+                  Open <strong>Dashboard → Facility Performance</strong> to compare branches for the selected
+                  reporting period. The consolidated view includes:
+                </p>
+                <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
+                  <li>Patients registered and patients handled during the period</li>
+                  <li>Current queue workload and daily queue arrivals</li>
+                  <li>Consultations, prescriptions and laboratory activity</li>
+                  <li>Amounts billed, payments collected and outstanding balances</li>
+                  <li>Pharmacy stores, available stock units and transfer activity</li>
+                </ul>
+                <p className="text-muted-foreground">
+                  Facility managers can focus on their assigned branch, while administrators use the consolidated
+                  table to identify workload differences, revenue performance, pending bills and stock pressure
+                  across the network.
+                </p>
+              </section>
+
+              <section className="space-y-3">
+                <h3 className="font-semibold text-base text-foreground flex items-center gap-2">
+                  <Store className="h-4 w-4" />
+                  Pharmacy stores and cross-branch transfers
+                </h3>
+                <p className="text-muted-foreground">
+                  Each pharmacy store belongs to a hospital branch. Open{" "}
+                  <strong>Pharmacy → Drug Movement → Inter-store transfers</strong> to move medication between
+                  stores in the same facility or across branches.
+                </p>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-md border p-3">
+                    <div className="font-medium">Pending</div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      The transfer request is recorded; stock has not moved.
+                    </p>
+                  </div>
+                  <div className="rounded-md border p-3">
+                    <div className="font-medium flex items-center gap-1">
+                      <ArrowLeftRight className="h-3.5 w-3.5" /> In transit
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Stock is deducted from the source store.
+                    </p>
+                  </div>
+                  <div className="rounded-md border p-3">
+                    <div className="font-medium">Completed</div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      The receiving store confirms and gains the transferred stock.
+                    </p>
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-2">
+                <h3 className="font-semibold text-base text-foreground">Recommended operating practice</h3>
+                <ol className="list-decimal pl-5 space-y-1 text-muted-foreground">
+                  <li>Confirm the selected branch before registering or serving a patient.</li>
+                  <li>Assign each staff member to their normal facility and grant all-branch access only when needed.</li>
+                  <li>Review Facility Performance regularly for workload, revenue and stock comparisons.</li>
+                  <li>Use Drug Movement rather than manual stock adjustments for transfers between facilities.</li>
+                </ol>
               </section>
             </CardContent>
           </Card>

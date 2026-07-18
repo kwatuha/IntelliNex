@@ -150,77 +150,38 @@ export function CriticalNotificationsProvider({ children }: { children: React.Re
     })
   }, [])
 
-  // Scan database for critical patients on initial load
+  // Soft background scan — defer so it does not compete with page navigations
+  // (Patients list, tabs, etc.). Prefer cached alerts from localStorage first.
   useEffect(() => {
+    let cancelled = false
+    let idleId: number | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+
     const scanForCriticalPatients = async () => {
+      if (cancelled) return
       try {
-        console.log('🔍 [CRITICAL ALERTS] Starting database scan for critical patients...')
-        console.log('🔍 [CRITICAL ALERTS] addNotification function available:', typeof addNotification === 'function')
-        
-        // Get all vital signs from today
-        console.log('🔍 [CRITICAL ALERTS] Fetching today\'s vital signs...')
         const todayVitals = await patientApi.getTodayVitals()
-        console.log('🔍 [CRITICAL ALERTS] Today\'s vital signs:', todayVitals?.length || 0, todayVitals)
-        
-        if (!todayVitals || todayVitals.length === 0) {
-          console.log('⚠️ [CRITICAL ALERTS] No vital signs found for today')
-          return
-        }
-        
-        // Get critical ranges
-        console.log('🔍 [CRITICAL ALERTS] Fetching critical ranges...')
+        if (cancelled || !todayVitals?.length) return
+
         const ranges = await triageApi.getCriticalVitalRanges()
+        if (cancelled) return
         const criticalRanges = ranges.filter((r: any) => r.isActive !== false)
-        console.log('🔍 [CRITICAL ALERTS] Active critical ranges:', criticalRanges.length, criticalRanges)
-        
-        if (criticalRanges.length === 0) {
-          console.log('⚠️ [CRITICAL ALERTS] No critical ranges configured')
-          return
-        }
-        
-        // Get all queue entries to check who's being served
-        console.log('🔍 [CRITICAL ALERTS] Fetching queue entries...')
-        const [consultationQueue, labQueue, radQueue] = await Promise.allSettled([
-          queueApi.getAll('consultation', undefined, 1, 100, true).catch(() => []),
-          queueApi.getAll('laboratory', undefined, 1, 100, true).catch(() => []),
-          queueApi.getAll('radiology', undefined, 1, 100, true).catch(() => []),
-        ])
-        
-        const allQueueEntries = [
-          ...(consultationQueue.status === 'fulfilled' ? consultationQueue.value : []),
-          ...(labQueue.status === 'fulfilled' ? labQueue.value : []),
-          ...(radQueue.status === 'fulfilled' ? radQueue.value : []),
-        ]
-        console.log('🔍 [CRITICAL ALERTS] Total queue entries:', allQueueEntries.length)
-        
-        // Group vitals by patient (get most recent for each patient)
+        if (criticalRanges.length === 0) return
+
+        // Skip queue fan-out here — it was flooding the API on every layout mount.
+        // Serving patients can clear alerts when staff act on them or open the badge.
         const patientVitalsMap = new Map<string, any>()
         todayVitals.forEach((vital: any) => {
           const patientId = vital.patientId?.toString()
           if (!patientId) return
-          
           const existing = patientVitalsMap.get(patientId)
           if (!existing || new Date(vital.recordedDate) > new Date(existing.recordedDate)) {
             patientVitalsMap.set(patientId, vital)
           }
         })
-        
-        console.log('🔍 [CRITICAL ALERTS] Unique patients with vitals:', patientVitalsMap.size)
-        
-        // Check each patient for critical values
-        let patientsWithCritical = 0
+
         for (const [patientId, vital] of patientVitalsMap.entries()) {
-          // Check if patient is being served
-          const isServed = allQueueEntries.some(
-            (entry: any) => entry.patientId?.toString() === patientId && entry.status === 'serving'
-          )
-          
-          if (isServed) {
-            console.log(`⏭️ [CRITICAL ALERTS] Patient ${patientId} is being served, skipping`)
-            continue
-          }
-          
-          // Check for critical values
+          if (cancelled) return
           const vitalsForCheck = {
             systolicBP: vital.systolicBP,
             diastolicBP: vital.diastolicBP,
@@ -231,114 +192,76 @@ export function CriticalNotificationsProvider({ children }: { children: React.Re
             glasgowComaScale: vital.glasgowComaScale,
             bloodGlucose: vital.bloodGlucose,
           }
-          
-          console.log(`🔍 [CRITICAL ALERTS] Checking patient ${patientId} vitals:`, vitalsForCheck)
-          
-          const patientName = vital.patientName || 
-            (vital.patientFirstName && vital.patientLastName 
+          const patientName =
+            vital.patientName ||
+            (vital.patientFirstName && vital.patientLastName
               ? `${vital.patientFirstName} ${vital.patientLastName}`.trim()
               : undefined)
-          
-          // Check and add notification if critical
-          const alerts = await checkAndNotifyCriticalVitals(
+
+          await checkAndNotifyCriticalVitals(
             vitalsForCheck,
             patientId,
             patientName,
-            addNotification
+            addNotification,
           )
-          
-          if (alerts.length > 0) {
-            patientsWithCritical++
-            console.log(`✅ [CRITICAL ALERTS] Found ${alerts.length} critical alerts for patient ${patientId} (${patientName}):`, alerts)
-          } else {
-            console.log(`ℹ️ [CRITICAL ALERTS] No critical alerts for patient ${patientId}`)
-          }
         }
-        
-        console.log(`✅ [CRITICAL ALERTS] Finished scanning. Checked ${patientVitalsMap.size} patients, found ${patientsWithCritical} with critical values.`)
-        console.log('🔍 [CRITICAL ALERTS] Current notifications after scan:', notifications.length)
       } catch (err) {
-        console.error('❌ [CRITICAL ALERTS] Error scanning for critical patients:', err)
-        // Log more details about the error
-        if (err instanceof Error) {
-          console.error('❌ [CRITICAL ALERTS] Error message:', err.message)
-          console.error('❌ [CRITICAL ALERTS] Error stack:', err.stack)
-        }
+        // Soft-fail: do not surface on page UI
+        console.error('[CRITICAL ALERTS] Background scan failed:', err)
       }
     }
-    
-    // Run scan on mount (with a small delay to ensure context is ready)
-    const timer = setTimeout(() => {
-      scanForCriticalPatients()
-    }, 1000) // Increased delay to ensure everything is ready
-    
-    return () => clearTimeout(timer)
-  }, [addNotification]) // Include addNotification in dependencies
 
-  // Check queue status on initial load to remove notifications for already-served patients
+    const startScan = () => {
+      if (cancelled) return
+      void scanForCriticalPatients()
+    }
+
+    // Wait for idle (or 8s fallback) so first navigation requests win
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      idleId = window.requestIdleCallback(startScan, { timeout: 8000 })
+    } else {
+      timer = setTimeout(startScan, 8000)
+    }
+
+    return () => {
+      cancelled = true
+      if (idleId !== undefined && typeof window !== 'undefined' && 'cancelIdleCallback' in window) {
+        window.cancelIdleCallback(idleId)
+      }
+      if (timer) clearTimeout(timer)
+    }
+  }, [addNotification])
+  // Soft-check stored alerts against serving status (deferred; never blocks navigation)
   useEffect(() => {
     if (notifications.length === 0) return
 
-    const checkInitialQueueStatus = async () => {
-      const patientIds = notifications.map((n) => n.patientId)
-      
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      if (cancelled) return
+      const patientIds = notifications.map((n) => n.patientId).slice(0, 20)
+
       try {
-        const queueChecks = await Promise.allSettled(
-          patientIds.map(async (patientId) => {
-            try {
-              const consultationQueue = await queueApi.getAll('consultation', undefined, 1, 100, true)
-              const patientEntries = consultationQueue.filter(
-                (entry: any) => entry.patientId?.toString() === patientId.toString()
-              )
-              
-              if (patientEntries.length === 0) {
-                const [labQueue, radQueue] = await Promise.all([
-                  queueApi.getAll('laboratory', undefined, 1, 100, true).catch(() => []),
-                  queueApi.getAll('radiology', undefined, 1, 100, true).catch(() => []),
-                ])
-                
-                const allEntries = [...labQueue, ...radQueue]
-                const foundEntries = allEntries.filter(
-                  (entry: any) => entry.patientId?.toString() === patientId.toString()
-                )
-                patientEntries.push(...foundEntries)
-              }
-              
-              // Only check for 'serving' status - don't remove for 'completed' as patient may still have critical values
-              const isServed = patientEntries.some(
-                (entry: any) => entry.status === 'serving'
-              )
-              
-              return { patientId, isServed }
-            } catch (err) {
-              console.error(`Error checking queue for patient ${patientId}:`, err)
-              return { patientId, isServed: false }
-            }
-          })
+        // One consultation queue pull instead of N per-patient fan-outs
+        const consultationQueue = await queueApi.getAll('consultation', undefined, 1, 100, true).catch(() => [])
+        if (cancelled) return
+        const servingIds = new Set(
+          consultationQueue
+            .filter((entry: any) => entry.status === 'serving')
+            .map((entry: any) => entry.patientId?.toString()),
         )
-
-        // Remove notifications for patients who are already served
-        const toRemove: string[] = []
-        queueChecks.forEach((result) => {
-          if (result.status === 'fulfilled') {
-            const { patientId, isServed } = result.value
-            if (isServed) {
-              toRemove.push(patientId)
-            }
-          }
-        })
-
-        // Remove all served patients at once
+        const toRemove = patientIds.filter((id) => servingIds.has(id.toString()))
         if (toRemove.length > 0) {
           setNotifications((prev) => prev.filter((n) => !toRemove.includes(n.patientId)))
         }
       } catch (err) {
         console.error('Error checking initial queue statuses:', err)
       }
-    }
+    }, 10000)
 
-    // Run once on mount
-    checkInitialQueueStatus()
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // Only run on mount
 
@@ -366,62 +289,21 @@ export function CriticalNotificationsProvider({ children }: { children: React.Re
     console.log('Refresh notifications called - notifications should persist from localStorage')
   }, [])
 
-  // Monitor queue status for patients with critical notifications
+  // Light poll: one consultation queue request, not N×3 per patient
   useEffect(() => {
     if (notifications.length === 0) return
 
     const checkQueueStatus = async () => {
-      const patientIds = notifications.map((n) => n.patientId)
-      
       try {
-        // Check queue status for all patients with critical notifications
-        // We'll check all service points to see if patient is being served
-        const queueChecks = await Promise.allSettled(
-          patientIds.map(async (patientId) => {
-            try {
-              // Get queue entries for this patient across all service points
-              // Check consultation first as that's where doctors typically serve patients
-              const consultationQueue = await queueApi.getAll('consultation', undefined, 1, 100, true)
-              const patientEntries = consultationQueue.filter(
-                (entry: any) => entry.patientId?.toString() === patientId.toString()
-              )
-              
-              // If not found in consultation, check other service points
-              if (patientEntries.length === 0) {
-                const [labQueue, radQueue] = await Promise.all([
-                  queueApi.getAll('laboratory', undefined, 1, 100, true).catch(() => []),
-                  queueApi.getAll('radiology', undefined, 1, 100, true).catch(() => []),
-                ])
-                
-                const allEntries = [...labQueue, ...radQueue]
-                const foundEntries = allEntries.filter(
-                  (entry: any) => entry.patientId?.toString() === patientId.toString()
-                )
-                patientEntries.push(...foundEntries)
-              }
-              
-              // Check if patient is currently being served (not just completed in the past)
-              // Only remove if patient is actively being served NOW
-              // We only check for 'serving' status - completed status doesn't mean they were served for critical values
-              const isServed = patientEntries.some(
-                (entry: any) => entry.status === 'serving'
-              )
-              
-              return { patientId, isServed }
-            } catch (err) {
-              console.error(`Error checking queue for patient ${patientId}:`, err)
-              return { patientId, isServed: false }
-            }
-          })
+        const consultationQueue = await queueApi.getAll('consultation', undefined, 1, 100, true).catch(() => [])
+        const servingIds = new Set(
+          consultationQueue
+            .filter((entry: any) => entry.status === 'serving')
+            .map((entry: any) => entry.patientId?.toString()),
         )
-
-        // Remove notifications for patients who are being served
-        queueChecks.forEach((result) => {
-          if (result.status === 'fulfilled') {
-            const { patientId, isServed } = result.value
-            if (isServed) {
-              removeNotification(patientId)
-            }
+        notifications.forEach((n) => {
+          if (servingIds.has(n.patientId.toString())) {
+            removeNotification(n.patientId)
           }
         })
       } catch (err) {
@@ -429,12 +311,7 @@ export function CriticalNotificationsProvider({ children }: { children: React.Re
       }
     }
 
-    // Check immediately on mount and whenever notifications change
-    checkQueueStatus()
-
-    // Then check every 10 seconds
-    const interval = setInterval(checkQueueStatus, 10000)
-
+    const interval = setInterval(checkQueueStatus, 30000)
     return () => clearInterval(interval)
   }, [notifications, removeNotification])
 

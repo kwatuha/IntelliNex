@@ -21,6 +21,7 @@ const {
     checkStoreReorderLevels,
     getStoreStockQuantity,
 } = require('../lib/pharmacyNotifications');
+const { notifyPrescriptionReady } = require('../lib/patientSms');
 
 /**
  * @route GET /api/pharmacy/medications
@@ -2456,8 +2457,10 @@ router.post('/dispensations', async (req, res) => {
         }
 
         const [pendingItems] = await connection.execute('SELECT COUNT(*) as count FROM prescription_items WHERE prescriptionId = ? AND status = "pending"', [prescriptionItem.prescriptionId]);
+        let prescriptionFullyDispensed = false;
         if (pendingItems[0].count === 0) {
             await connection.execute('UPDATE prescriptions SET status = "dispensed", updatedAt = NOW() WHERE prescriptionId = ?', [prescriptionItem.prescriptionId]);
+            prescriptionFullyDispensed = true;
         }
 
         // 9. Check if patient should be removed from pharmacy queue
@@ -2505,6 +2508,20 @@ router.post('/dispensations', async (req, res) => {
              INNER JOIN users u ON d.dispensedBy = u.userId
              WHERE d.dispensationId = ?`, [dispensationId]
         );
+
+        if (prescriptionFullyDispensed && patientId) {
+            try {
+                const [prescRows] = await connection.execute(
+                    'SELECT prescriptionNumber FROM prescriptions WHERE prescriptionId = ? LIMIT 1',
+                    [prescriptionId]
+                );
+                notifyPrescriptionReady(patientId, {
+                    prescriptionNumber: prescRows[0]?.prescriptionNumber,
+                });
+            } catch (smsErr) {
+                console.error('[SMS] prescription ready notify skipped:', smsErr.message || smsErr);
+            }
+        }
 
         res.status(201).json(result[0]);
     } catch (error) {
@@ -3533,8 +3550,11 @@ router.get('/branches', async (req, res) => {
         const params = [];
 
         if (isActive !== undefined && isActive !== 'all') {
+            const activeFlag = ['true', '1', 'yes'].includes(String(isActive).toLowerCase())
+                ? 1
+                : 0;
             query += ` AND isActive = ?`;
-            params.push(isActive === 'true' ? 1 : 0);
+            params.push(activeFlag);
         } else {
             query += ` AND isActive = 1`;
         }
@@ -3742,9 +3762,14 @@ router.get('/drug-stores', async (req, res) => {
         `;
         const params = [];
 
+        // Accept true/1/yes (active), false/0/no (inactive), or all (no filter).
+        // Callers historically pass isActive=1; treating only === 'true' as active returned inactive-only rows.
         if (isActive !== undefined && isActive !== 'all') {
+            const activeFlag = ['true', '1', 'yes'].includes(String(isActive).toLowerCase())
+                ? 1
+                : 0;
             query += ` AND ds.isActive = ?`;
-            params.push(isActive === 'true' ? 1 : 0);
+            params.push(activeFlag);
         } else {
             query += ` AND ds.isActive = 1`;
         }
@@ -3755,8 +3780,11 @@ router.get('/drug-stores', async (req, res) => {
         }
 
         if (isDispensingStore !== undefined) {
+            const dispensingFlag = ['true', '1', 'yes'].includes(String(isDispensingStore).toLowerCase())
+                ? 1
+                : 0;
             query += ` AND ds.isDispensingStore = ?`;
-            params.push(isDispensingStore === 'true' ? 1 : 0);
+            params.push(dispensingFlag);
         }
 
         if (search) {

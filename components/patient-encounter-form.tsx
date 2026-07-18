@@ -119,6 +119,7 @@ const labTestSchema = z.object({
   }),
   priority: z.enum(["routine", "urgent", "stat"]).default("routine"),
   clinicalIndication: z.string().optional(),
+  orderDate: z.string().min(1, { message: "Order date is required." }),
   alreadySaved: z.boolean().optional(), // Track if already saved
 })
 
@@ -128,6 +129,7 @@ const procedureSchema = z.object({
   }),
   notes: z.string().optional(),
   complications: z.string().optional(),
+  procedureDate: z.string().min(1, { message: "Procedure date is required." }),
   alreadySaved: z.boolean().optional(), // Track if already saved
 })
 
@@ -151,6 +153,7 @@ const orderSchema = z.object({
     message: "Quantity must be at least 1.",
   }),
   notes: z.string().optional(),
+  orderDate: z.string().min(1, { message: "Order date is required." }),
   alreadySaved: z.boolean().optional(), // Track if already saved
 })
 
@@ -193,6 +196,8 @@ type RadiologyOrderValues = z.infer<typeof radiologyOrderSchema>
 type OrderValues = z.infer<typeof orderSchema>
 type EncounterFormValues = z.infer<typeof encounterFormSchema>
 
+const todayYmd = () => format(new Date(), "yyyy-MM-dd")
+
 const defaultMedication: MedicationValues = {
   medicationId: "",
   dosage: "",
@@ -202,17 +207,19 @@ const defaultMedication: MedicationValues = {
   instructions: "",
 }
 
-const defaultLabTest: LabTestValues = {
+const createDefaultLabTest = (): LabTestValues => ({
   testTypeId: "",
   priority: "routine",
   clinicalIndication: "",
-}
+  orderDate: todayYmd(),
+})
 
-const defaultProcedure: ProcedureValues = {
+const createDefaultProcedure = (): ProcedureValues => ({
   procedureId: "",
   notes: "",
   complications: "",
-}
+  procedureDate: todayYmd(),
+})
 
 const defaultRadiologyOrder: RadiologyOrderValues = {
   examTypeId: "",
@@ -223,11 +230,17 @@ const defaultRadiologyOrder: RadiologyOrderValues = {
   notes: "",
 }
 
-const defaultOrder: OrderValues = {
+const createDefaultOrder = (): OrderValues => ({
   chargeId: "",
   quantity: 1,
   notes: "",
-}
+  orderDate: todayYmd(),
+})
+
+/** @deprecated use createDefault* for fresh "today" defaults */
+const defaultLabTest = createDefaultLabTest()
+const defaultProcedure = createDefaultProcedure()
+const defaultOrder = createDefaultOrder()
 
 interface PatientEncounterFormProps {
   open: boolean
@@ -275,16 +288,16 @@ export function PatientEncounterForm({
   const [editingProcedureIndex, setEditingProcedureIndex] = useState<number | null>(null)
   const [editingRadiologyIndex, setEditingRadiologyIndex] = useState<number | null>(null)
   const [editingOrderIndex, setEditingOrderIndex] = useState<number | null>(null)
-  const [tempProcedure, setTempProcedure] = useState<ProcedureValues>(defaultProcedure)
+  const [tempProcedure, setTempProcedure] = useState<ProcedureValues>(() => createDefaultProcedure())
   const [tempRadiologyOrder, setTempRadiologyOrder] = useState<RadiologyOrderValues>(defaultRadiologyOrder)
-  const [tempOrder, setTempOrder] = useState<OrderValues>(defaultOrder)
+  const [tempOrder, setTempOrder] = useState<OrderValues>(() => createDefaultOrder())
   const [labTestsSheetOpen, setLabTestsSheetOpen] = useState(false)
   const [symptomsSheetOpen, setSymptomsSheetOpen] = useState(false)
   const [diagnosisSheetOpen, setDiagnosisSheetOpen] = useState(false)
   const [historySheetOpen, setHistorySheetOpen] = useState(false)
   const [editingLabTestIndex, setEditingLabTestIndex] = useState<number | null>(null)
   const [addTestDialogOpen, setAddTestDialogOpen] = useState(false)
-  const [tempLabTest, setTempLabTest] = useState<LabTestValues>(defaultLabTest)
+  const [tempLabTest, setTempLabTest] = useState<LabTestValues>(() => createDefaultLabTest())
   const [editingMedicationIndex, setEditingMedicationIndex] = useState<number | null>(null)
   const [addMedicationDialogOpen, setAddMedicationDialogOpen] = useState(false)
   const [tempMedication, setTempMedication] = useState<MedicationValues>(defaultMedication)
@@ -354,11 +367,12 @@ export function PatientEncounterForm({
           procedureId: procData.procedureId ? String(procData.procedureId) : "",
           notes: procData.notes || "",
           complications: procData.complications || "",
+          procedureDate: (procData as any).procedureDate || todayYmd(),
         })
       }
     } else if (addProcedureDialogOpen && editingProcedureIndex === null) {
       // Reset to default when adding new
-      setTempProcedure(defaultProcedure)
+      setTempProcedure(createDefaultProcedure())
     }
   }, [addProcedureDialogOpen, editingProcedureIndex])
 
@@ -637,7 +651,7 @@ export function PatientEncounterForm({
   // Reset tempLabTest when dialog opens for adding a new test (not editing)
   useEffect(() => {
     if (addTestDialogOpen && editingLabTestIndex === null) {
-      setTempLabTest(defaultLabTest)
+      setTempLabTest(createDefaultLabTest())
     }
   }, [addTestDialogOpen, editingLabTestIndex])
 
@@ -980,13 +994,39 @@ export function PatientEncounterForm({
       setIsLoadingData(true)
       setLoading(true)
       setError(null)
-      const [doctorsData, testTypesData, medicationsData, proceduresData, examTypesData, consumablesData] = await Promise.all([
-        doctorsApi.getAll(),
-        laboratoryApi.getTestTypes(),
-        pharmacyApi.getMedications(undefined, 1, 1000), // Get all medications for lookup
-        proceduresApi.getAll(undefined, undefined, true), // Get active procedures
-        radiologyApi.getExamTypes(undefined, undefined, 1, 1000), // Get all exam types
-        serviceChargeApi.getAll(undefined, undefined, undefined, undefined, 'Consumable'), // Get consumables
+      // Load catalogs independently so one failing endpoint does not empty every dropdown
+      const [
+        doctorsData,
+        testTypesData,
+        medicationsData,
+        proceduresData,
+        examTypesData,
+        consumablesData,
+      ] = await Promise.all([
+        doctorsApi.getAll().catch((err) => {
+          console.error('[ENCOUNTER FORM] doctors load failed:', err)
+          return []
+        }),
+        laboratoryApi.getTestTypes().catch((err) => {
+          console.error('[ENCOUNTER FORM] lab test types load failed:', err)
+          return []
+        }),
+        pharmacyApi.getMedications(undefined, 1, 1000).catch((err) => {
+          console.error('[ENCOUNTER FORM] medications load failed:', err)
+          return []
+        }),
+        proceduresApi.getAll(undefined, undefined, true).catch((err) => {
+          console.error('[ENCOUNTER FORM] procedures load failed:', err)
+          return []
+        }),
+        radiologyApi.getExamTypes(undefined, undefined, 1, 1000).catch((err) => {
+          console.error('[ENCOUNTER FORM] exam types load failed:', err)
+          return []
+        }),
+        serviceChargeApi.getAll(undefined, undefined, undefined, undefined, 'Consumable').catch((err) => {
+          console.error('[ENCOUNTER FORM] consumables load failed:', err)
+          return []
+        }),
       ])
 
       // Clear timeout if data loads successfully
@@ -1472,7 +1512,7 @@ export function PatientEncounterForm({
           const labOrderData = {
             patientId: parseInt(data.patientId),
             orderedBy: parseInt(data.doctorId),
-            orderDate: format(data.encounterDate, 'yyyy-MM-dd'),
+            orderDate: testList[0]?.orderDate || format(data.encounterDate, 'yyyy-MM-dd'),
             priority: priority,
             clinicalIndication: testList.map(t => t.clinicalIndication).filter(Boolean).join('; ') || null,
             status: 'pending',
@@ -1530,7 +1570,7 @@ export function PatientEncounterForm({
             const procedureData = {
               patientId: parseInt(data.patientId),
               procedureId: procedureIdNum,
-              procedureDate: format(data.encounterDate, 'yyyy-MM-dd'),
+              procedureDate: procedure.procedureDate || format(data.encounterDate, 'yyyy-MM-dd'),
               performedBy: parseInt(data.doctorId),
               notes: procedure.notes || null,
               complications: procedure.complications || null,
@@ -1642,11 +1682,14 @@ export function PatientEncounterForm({
 
         if (orderInvoiceItems.length > 0) {
           const totalAmount = orderInvoiceItems.reduce((sum: number, item: any) => sum + item.totalPrice, 0)
+          const batchOrderDate =
+            unsavedOrders[0]?.orderDate || format(data.encounterDate, 'yyyy-MM-dd')
+          const batchOrderDateObj = new Date(`${batchOrderDate}T00:00:00`)
 
           const invoiceData = {
             patientId: parseInt(data.patientId),
-            invoiceDate: format(data.encounterDate, 'yyyy-MM-dd'),
-            dueDate: format(new Date(data.encounterDate.getTime() + 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'),
+            invoiceDate: batchOrderDate,
+            dueDate: format(new Date(batchOrderDateObj.getTime() + 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'),
             status: 'pending',
             items: orderInvoiceItems,
             notes: `Consumables ordered during encounter on ${format(data.encounterDate, 'PPP')}.`,
@@ -3527,7 +3570,7 @@ const clearDraftFromStorage = (patientId:any) => {
                       size="sm"
                       onClick={() => {
                         setEditingLabTestIndex(null)
-                        setTempLabTest(defaultLabTest)
+                        setTempLabTest(createDefaultLabTest())
                         setAddTestDialogOpen(true)
                       }}
                       disabled={testTypes.length === 0}
@@ -4382,7 +4425,7 @@ const clearDraftFromStorage = (patientId:any) => {
                   size="sm"
                   onClick={() => {
                     setEditingProcedureIndex(null)
-                    setTempProcedure(defaultProcedure)
+                    setTempProcedure(createDefaultProcedure())
                     setAddProcedureDialogOpen(true)
                   }}
                 >
@@ -4618,7 +4661,7 @@ const clearDraftFromStorage = (patientId:any) => {
                   size="sm"
                   onClick={() => {
                     setEditingOrderIndex(null)
-                    setTempOrder(defaultOrder)
+                    setTempOrder(createDefaultOrder())
                     setAddOrderDialogOpen(true)
                   }}
                 >
@@ -4728,7 +4771,7 @@ const clearDraftFromStorage = (patientId:any) => {
                                     onClick={() => {
                                       setEditingOrderIndex(index)
                                       const orderData = form.getValues(`orders.${index}`)
-                                      setTempOrder(orderData || defaultOrder)
+                                      setTempOrder(orderData ? { ...createDefaultOrder(), ...orderData, orderDate: (orderData as any).orderDate || todayYmd() } : createDefaultOrder())
                                       setAddOrderDialogOpen(true)
                                     }}
                                     className="h-8 w-8 p-0"
@@ -5275,16 +5318,29 @@ const clearDraftFromStorage = (patientId:any) => {
           <div className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                    Order Date *
+                  </label>
+                  <Input
+                    type="date"
+                    value={tempLabTest.orderDate || todayYmd()}
+                    onChange={(e) => setTempLabTest({ ...tempLabTest, orderDate: e.target.value || todayYmd() })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
                     Test Type *
                   </label>
-                  {getAvailableTestTypes().length > 0 ? (
+                  {testTypes.length === 0 ? (
+                    <div className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+                      No lab test types loaded. Check that the laboratory catalog is available, then reopen this dialog.
+                    </div>
+                  ) : getAvailableTestTypes().length > 0 ? (
                     <TestTypeCombobox
                       value={tempLabTest.testTypeId || ""}
                       onValueChange={(testTypeId) => {
                         setTempLabTest({ ...tempLabTest, testTypeId })
                       }}
                       placeholder="Search or select test type"
-                      disabled={testTypes.length === 0}
                       staticTestTypes={getAvailableTestTypes()}
                       catalogForLookup={testTypes}
                     />
@@ -5337,7 +5393,7 @@ const clearDraftFromStorage = (patientId:any) => {
                   onClick={() => {
                     setAddTestDialogOpen(false)
                     setEditingLabTestIndex(null)
-                    setTempLabTest(defaultLabTest)
+                    setTempLabTest(createDefaultLabTest())
                   }}
                 >
                   Cancel
@@ -5359,10 +5415,20 @@ const clearDraftFromStorage = (patientId:any) => {
                     const doctorId = formData.doctorId
                     const encounterDate = formData.encounterDate
                     
-                    if (!patientId || !doctorId || !encounterDate) {
+                    if (!patientId || !doctorId) {
                       toast({
                         title: "Missing Information",
-                        description: "Please ensure patient, doctor, and encounter date are set before adding lab tests.",
+                        description: "Please ensure patient and doctor are set before adding lab tests.",
+                        variant: "destructive",
+                      })
+                      return
+                    }
+
+                    const labOrderDate = tempLabTest.orderDate || (encounterDate ? format(encounterDate, 'yyyy-MM-dd') : todayYmd())
+                    if (!labOrderDate) {
+                      toast({
+                        title: "Missing Information",
+                        description: "Please set an order date for the lab test.",
                         variant: "destructive",
                       })
                       return
@@ -5373,14 +5439,14 @@ const clearDraftFromStorage = (patientId:any) => {
                       form.setValue(`labTests.${editingLabTestIndex}`, tempLabTest)
                       setAddTestDialogOpen(false)
                       setEditingLabTestIndex(null)
-                      setTempLabTest(defaultLabTest)
+                      setTempLabTest(createDefaultLabTest())
                     } else {
                       // Save lab test order immediately when adding
                       try {
                         const orderData = {
                           patientId: parseInt(patientId),
                           orderedBy: parseInt(doctorId),
-                          orderDate: format(encounterDate, 'yyyy-MM-dd'),
+                          orderDate: labOrderDate,
                           priority: tempLabTest.priority || 'routine',
                           status: 'pending',
                           items: [{
@@ -5417,7 +5483,7 @@ const clearDraftFromStorage = (patientId:any) => {
                         })
                         
                         setAddTestDialogOpen(false)
-                        setTempLabTest(defaultLabTest)
+                        setTempLabTest(createDefaultLabTest())
                       } catch (error: any) {
                         console.error('❌ Error saving lab test order:', error)
                         toast({
@@ -5649,7 +5715,7 @@ const clearDraftFromStorage = (patientId:any) => {
         setAddProcedureDialogOpen(open)
         if (!open) {
           setEditingProcedureIndex(null)
-          setTempProcedure(defaultProcedure)
+          setTempProcedure(createDefaultProcedure())
         }
       }}>
         <DialogContent data-encounter-layer className="sm:max-w-[600px] z-[161]" overlayClassName="z-[160]">
@@ -5662,6 +5728,16 @@ const clearDraftFromStorage = (patientId:any) => {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                Procedure Date *
+              </label>
+              <Input
+                type="date"
+                value={tempProcedure.procedureDate || todayYmd()}
+                onChange={(e) => setTempProcedure({ ...tempProcedure, procedureDate: e.target.value || todayYmd() })}
+              />
+            </div>
             <div className="space-y-2">
               <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
                 Procedure *
@@ -5709,7 +5785,7 @@ const clearDraftFromStorage = (patientId:any) => {
               onClick={() => {
                 setAddProcedureDialogOpen(false)
                 setEditingProcedureIndex(null)
-                setTempProcedure(defaultProcedure)
+                setTempProcedure(createDefaultProcedure())
               }}
             >
               Cancel
@@ -5727,28 +5803,32 @@ const clearDraftFromStorage = (patientId:any) => {
                 const doctorId = formData.doctorId
                 const encounterDate = formData.encounterDate
                 
-                if (!patientId || !doctorId || !encounterDate) {
+                if (!patientId || !doctorId) {
                   toast({
                     title: "Missing Information",
-                    description: "Please ensure patient, doctor, and encounter date are set before adding procedures.",
+                    description: "Please ensure patient and doctor are set before adding procedures.",
                     variant: "destructive",
                   })
                   return
                 }
+
+                const procedureDate =
+                  tempProcedure.procedureDate ||
+                  (encounterDate ? format(encounterDate, 'yyyy-MM-dd') : todayYmd())
                 
                 if (editingProcedureIndex !== null) {
                   // Update existing procedure in form
                   form.setValue(`procedures.${editingProcedureIndex}`, tempProcedure)
                   setAddProcedureDialogOpen(false)
                   setEditingProcedureIndex(null)
-                  setTempProcedure(defaultProcedure)
+                  setTempProcedure(createDefaultProcedure())
                 } else {
                   // Save procedure immediately when adding
                   try {
                     const procedureData = {
                       patientId: parseInt(patientId),
                       procedureId: parseInt(tempProcedure.procedureId),
-                      procedureDate: format(encounterDate, 'yyyy-MM-dd'),
+                      procedureDate,
                       performedBy: parseInt(doctorId),
                       notes: tempProcedure.notes || null,
                       complications: tempProcedure.complications || null,
@@ -5782,7 +5862,7 @@ const clearDraftFromStorage = (patientId:any) => {
                     })
                     
                     setAddProcedureDialogOpen(false)
-                    setTempProcedure(defaultProcedure)
+                    setTempProcedure(createDefaultProcedure())
                   } catch (error: any) {
                     console.error('❌ Error saving procedure:', error)
                     toast({
@@ -6034,6 +6114,16 @@ const clearDraftFromStorage = (patientId:any) => {
           <div className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                Order Date *
+              </label>
+              <Input
+                type="date"
+                value={tempOrder.orderDate || todayYmd()}
+                onChange={(e) => setTempOrder({ ...tempOrder, orderDate: e.target.value || todayYmd() })}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
                 Consumable/Item *
               </label>
               <Popover>
@@ -6129,7 +6219,7 @@ const clearDraftFromStorage = (patientId:any) => {
               onClick={() => {
                 setAddOrderDialogOpen(false)
                 setEditingOrderIndex(null)
-                setTempOrder(defaultOrder)
+                setTempOrder(createDefaultOrder())
               }}
             >
               Cancel
@@ -6146,21 +6236,26 @@ const clearDraftFromStorage = (patientId:any) => {
                 const patientId = formData.patientId
                 const encounterDate = formData.encounterDate
                 
-                if (!patientId || !encounterDate) {
+                if (!patientId) {
                   toast({
                     title: "Missing Information",
-                    description: "Please ensure patient and encounter date are set before adding orders.",
+                    description: "Please ensure patient is set before adding orders.",
                     variant: "destructive",
                   })
                   return
                 }
+
+                const orderDateValue =
+                  tempOrder.orderDate ||
+                  (encounterDate ? format(encounterDate, 'yyyy-MM-dd') : todayYmd())
+                const orderDateObj = new Date(`${orderDateValue}T00:00:00`)
                 
                 if (editingOrderIndex !== null) {
                   // Update existing order in form
                   form.setValue(`orders.${editingOrderIndex}`, tempOrder)
                   setAddOrderDialogOpen(false)
                   setEditingOrderIndex(null)
-                  setTempOrder(defaultOrder)
+                  setTempOrder(createDefaultOrder())
                 } else {
                   // Save consumables order immediately when adding
                   try {
@@ -6181,8 +6276,8 @@ const clearDraftFromStorage = (patientId:any) => {
 
                     const invoiceData = {
                       patientId: parseInt(patientId),
-                      invoiceDate: format(encounterDate, 'yyyy-MM-dd'),
-                      dueDate: format(new Date(encounterDate.getTime() + 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'),
+                      invoiceDate: orderDateValue,
+                      dueDate: format(new Date(orderDateObj.getTime() + 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'),
                       status: 'pending',
                       items: [{
                         description: itemName,
@@ -6239,7 +6334,7 @@ const clearDraftFromStorage = (patientId:any) => {
                     })
                     
                     setAddOrderDialogOpen(false)
-                    setTempOrder(defaultOrder)
+                    setTempOrder(createDefaultOrder())
                   } catch (error: any) {
                     console.error('❌ Error saving order:', error)
                     toast({

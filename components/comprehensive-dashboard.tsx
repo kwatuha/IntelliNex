@@ -29,7 +29,8 @@ import {
   Clock,
   AlertCircle,
   CheckCircle2,
-  Loader2
+  Loader2,
+  Video
 } from "lucide-react"
 import { patientApi, appointmentsApi, employeeApi, inventoryApi, departmentApi, dashboardApi } from "@/lib/api"
 import { formatDate, formatTime } from "@/lib/date-utils"
@@ -393,6 +394,12 @@ export function ComprehensiveDashboard() {
                 <Link href="/queue">
                   <Activity className="mr-2 h-4 w-4" />
                   Manage Queue
+                </Link>
+              </Button>
+              <Button variant="outline" className="w-full justify-start" asChild>
+                <Link href="/telemedicine">
+                  <Video className="mr-2 h-4 w-4" />
+                  Telemedicine
                 </Link>
               </Button>
               <Button variant="outline" className="w-full justify-start" asChild>

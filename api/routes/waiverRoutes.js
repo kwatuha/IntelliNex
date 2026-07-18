@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
+const { notifyBillWaived } = require('../lib/patientSms');
 
 /**
  * Helper function to trigger workflow progression when a waiver is approved
@@ -882,6 +883,13 @@ router.post('/', async (req, res) => {
             [result.insertId]
         );
 
+        if (status === 'approved' && patientId) {
+            notifyBillWaived(patientId, {
+                waiverAmount: newWaiver[0]?.waiverAmount,
+                invoiceNumber: newWaiver[0]?.invoiceNumber,
+            });
+        }
+
         res.status(201).json(newWaiver[0]);
     } catch (error) {
         await connection.rollback();
@@ -983,6 +991,13 @@ router.put('/:id/approve', async (req, res) => {
              WHERE bw.waiverId = ?`,
             [id]
         );
+
+        if (waiver.patientId) {
+            notifyBillWaived(waiver.patientId, {
+                waiverAmount: waiver.waiverAmount ?? updated[0]?.waiverAmount,
+                invoiceNumber: updated[0]?.invoiceNumber,
+            });
+        }
 
         res.status(200).json(updated[0]);
     } catch (error) {

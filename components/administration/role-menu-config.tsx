@@ -59,6 +59,7 @@ const PAGE_TABS: Record<string, Array<{ value: string; label: string }>> = {
     { value: "admissions", label: "Admissions" },
     { value: "documents", label: "Documents" },
     { value: "allergies", label: "Allergies" },
+    { value: "ncd", label: "NCD Care" },
     { value: "insurance", label: "Insurance" },
     { value: "family-history", label: "Family History" },
     { value: "queue-status", label: "Queue Status" },

@@ -48,8 +48,8 @@ async function getAllActiveBranches(executor = pool) {
 }
 
 async function getUserBranchContext(executor = pool, userId) {
-  const mainBranch = await getMainBranch(executor);
   if (!userId) {
+    const mainBranch = await getMainBranch(executor);
     return {
       branches: mainBranch ? [mainBranch] : [],
       defaultBranch: mainBranch,
@@ -58,16 +58,19 @@ async function getUserBranchContext(executor = pool, userId) {
     };
   }
 
-  const assignments = await safeQuery(
-    executor,
-    `SELECT uba.assignmentId, uba.userId, uba.branchId, uba.isDefault, uba.canAccessAllBranches,
-            b.branchCode, b.branchName, b.isMainBranch
-     FROM user_branch_assignments uba
-     LEFT JOIN branches b ON uba.branchId = b.branchId
-     WHERE uba.userId = ? AND uba.isActive = 1 AND (b.branchId IS NULL OR b.isActive = 1)
-     ORDER BY uba.isDefault DESC, b.isMainBranch DESC, b.branchName ASC`,
-    [userId]
-  );
+  const [mainBranch, assignments] = await Promise.all([
+    getMainBranch(executor),
+    safeQuery(
+      executor,
+      `SELECT uba.assignmentId, uba.userId, uba.branchId, uba.isDefault, uba.canAccessAllBranches,
+              b.branchCode, b.branchName, b.isMainBranch
+       FROM user_branch_assignments uba
+       LEFT JOIN branches b ON uba.branchId = b.branchId
+       WHERE uba.userId = ? AND uba.isActive = 1 AND (b.branchId IS NULL OR b.isActive = 1)
+       ORDER BY uba.isDefault DESC, b.isMainBranch DESC, b.branchName ASC`,
+      [userId]
+    ),
+  ]);
 
   const canAccessAllBranches = assignments.some((row) => Boolean(row.canAccessAllBranches));
   const branches = canAccessAllBranches

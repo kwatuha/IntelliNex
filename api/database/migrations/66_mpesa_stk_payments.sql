@@ -1,0 +1,27 @@
+-- Cloudsasa M-Pesa STK Push pending/result sessions (guide: docs/MPESA_STK_INTEGRATION_GUIDE.md)
+CREATE TABLE IF NOT EXISTS mpesa_stk_payments (
+  stkPaymentId INT NOT NULL AUTO_INCREMENT,
+  checkoutRequestId VARCHAR(128) NOT NULL,
+  merchantRequestId VARCHAR(128) NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  amount DECIMAL(12, 2) NOT NULL,
+  phone VARCHAR(32) NOT NULL,
+  patientId INT NULL,
+  allocationsJson JSON NOT NULL,
+  batchReceiptNumber VARCHAR(96) NULL,
+  mpesaReceiptNumber VARCHAR(64) NULL,
+  resultCode INT NULL,
+  resultDesc VARCHAR(512) NULL,
+  transactionDate VARCHAR(32) NULL,
+  callbackPhone VARCHAR(32) NULL,
+  initiatedByUserId INT NULL,
+  appliedAt TIMESTAMP NULL,
+  rawInitiateJson JSON NULL,
+  rawCallbackJson JSON NULL,
+  createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (stkPaymentId),
+  UNIQUE KEY uq_mpesa_stk_checkout (checkoutRequestId),
+  INDEX idx_mpesa_stk_status (status, createdAt),
+  INDEX idx_mpesa_stk_patient (patientId)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

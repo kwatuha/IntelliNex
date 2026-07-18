@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
+const { notifyLabResultsReady } = require('../lib/patientSms');
 
 /**
  * @route GET /api/laboratory/test-types
@@ -748,6 +749,26 @@ router.post('/orders/:id/results', async (req, res) => {
         );
 
         result[0].values = resultValues;
+
+        try {
+            const [orderMeta] = await connection.execute(
+                `SELECT lo.patientId, lo.orderNumber, ltt.testName
+                 FROM lab_test_orders lo
+                 INNER JOIN lab_test_order_items loi ON loi.orderId = lo.orderId
+                 LEFT JOIN lab_test_types ltt ON loi.testTypeId = ltt.testTypeId
+                 WHERE loi.itemId = ?
+                 LIMIT 1`,
+                [orderItemId]
+            );
+            if (orderMeta.length > 0 && orderMeta[0].patientId) {
+                notifyLabResultsReady(orderMeta[0].patientId, {
+                    orderNumber: orderMeta[0].orderNumber,
+                    testName: orderMeta[0].testName,
+                });
+            }
+        } catch (smsErr) {
+            console.error('[SMS] lab result create notify skipped:', smsErr.message || smsErr);
+        }
 
         res.status(201).json(result[0]);
     } catch (error) {

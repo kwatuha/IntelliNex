@@ -3,6 +3,11 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const { resolveChargeRate } = require('../lib/chargeRateResolver');
+const { notifyPaymentReceived } = require('../lib/patientSms');
+const mpesaRoutes = require('./mpesaRoutes');
+
+// Cloudsasa M-Pesa STK (initiate + public callback) — docs/MPESA_STK_INTEGRATION_GUIDE.md
+router.use('/mpesa', mpesaRoutes);
 
 /**
  * Resolve unit price for an invoice line item (uses shared resolver; no ward override).
@@ -1407,6 +1412,15 @@ router.post('/invoices/:id/payment', async (req, res) => {
              ORDER BY ii.itemId`,
             [id]
         );
+
+        if (invoice.patientId) {
+            notifyPaymentReceived(invoice.patientId, {
+                amount: paymentAmount,
+                invoiceNumber: updated[0]?.invoiceNumber || invoice.invoiceNumber,
+                balance: outstanding,
+                paymentMethod: paymentMethod || invoice.paymentMethod,
+            });
+        }
 
         res.status(200).json({
             ...updated[0],

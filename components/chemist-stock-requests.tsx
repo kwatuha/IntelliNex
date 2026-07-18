@@ -139,7 +139,7 @@ export function ChemistStockRequests() {
           limit: 100,
         }),
         pharmacyApi.getMedications(undefined, 1, 500),
-        pharmacyApi.getDrugStores(undefined, undefined, "1"),
+        pharmacyApi.getDrugStores(undefined, undefined, "true"),
       ])
       setRequests(requestData || [])
       setMedications(medicationData || [])

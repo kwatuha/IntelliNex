@@ -36,6 +36,8 @@ interface DiagnosisComboboxProps {
   allowMultiple?: boolean
   selectedDiagnoses?: Diagnosis[]
   onRemoveDiagnosis?: (diagnosisId: number) => void
+  /** Use true when rendered inside a Dialog so the list receives pointer events */
+  modal?: boolean
 }
 
 export function DiagnosisCombobox({
@@ -46,6 +48,7 @@ export function DiagnosisCombobox({
   allowMultiple = false,
   selectedDiagnoses = [],
   onRemoveDiagnosis,
+  modal = false,
 }: DiagnosisComboboxProps) {
   const [open, setOpen] = React.useState(false)
   const [diagnoses, setDiagnoses] = React.useState<Diagnosis[]>([])
@@ -168,7 +171,7 @@ export function DiagnosisCombobox({
           ))}
         </div>
       )}
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={setOpen} modal={modal}>
         <PopoverTrigger asChild>
           <Button
             variant="outline"

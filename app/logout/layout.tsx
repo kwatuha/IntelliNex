@@ -1,5 +1,5 @@
-import { AuthProvider } from "@/lib/auth/auth-context";
-
 export default function LogoutLayout({ children }: { children: React.ReactNode }) {
-  return <AuthProvider>{children}</AuthProvider>;
-} 
+  // Do not wrap in AuthProvider — root layout already provides auth, and a nested
+  // provider would re-run token verify during logout (slow / racey).
+  return children
+}

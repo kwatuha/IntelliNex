@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const router = express.Router();
 const pool = require('../config/db');
 const { resolveChargeRate } = require('../lib/chargeRateResolver');
+const { notifyPatientAdmitted, notifyPatientDischarged } = require('../lib/patientSms');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_fallback_secret_for_dev_only_change_this_asap';
 
@@ -370,6 +371,14 @@ router.post('/admissions', async (req, res) => {
             [admissionId]
         );
 
+        if (newAdmission[0]?.patientId) {
+            notifyPatientAdmitted(newAdmission[0].patientId, {
+                wardName: newAdmission[0].wardName,
+                bedNumber: newAdmission[0].bedNumber,
+                admissionNumber: newAdmission[0].admissionNumber,
+            });
+        }
+
         res.status(201).json(newAdmission[0]);
     } catch (error) {
         await connection.rollback();
@@ -395,7 +404,7 @@ router.put('/admissions/:id', async (req, res) => {
 
         // Check if admission exists
         const [existing] = await connection.execute(
-            'SELECT bedId, status, admittingDoctorId FROM admissions WHERE admissionId = ?',
+            'SELECT bedId, status, admittingDoctorId, patientId, admissionNumber FROM admissions WHERE admissionId = ?',
             [id]
         );
 
@@ -542,6 +551,17 @@ router.put('/admissions/:id', async (req, res) => {
              WHERE a.admissionId = ?`,
             [id]
         );
+
+        if (
+            status === 'discharged' &&
+            oldStatus !== 'discharged' &&
+            (updated[0]?.patientId || existing[0].patientId)
+        ) {
+            notifyPatientDischarged(updated[0]?.patientId || existing[0].patientId, {
+                admissionNumber: updated[0]?.admissionNumber || existing[0].admissionNumber,
+                wardName: updated[0]?.wardName,
+            });
+        }
 
         res.status(200).json(updated[0]);
     } catch (error) {

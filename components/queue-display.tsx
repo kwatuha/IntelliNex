@@ -23,14 +23,11 @@ import {
   TelemedicineOptionalMeetingLinkFields,
   telemedicineOptionalLinkBody,
 } from "@/components/telemedicine-optional-meeting-link-fields"
-import { isZoomProvider, meetingHrefFromUrl, type TelemedicineVideoProviderId } from "@/lib/telemedicine-providers"
+import { isZoomProvider, isDailyProvider, providerRequiresPastedMeetingLink, meetingHrefFromUrl, type TelemedicineVideoProviderId } from "@/lib/telemedicine-providers"
 import { telemedicineCreateToast } from "@/lib/telemedicine-create-result"
 import { TelemedicineZoomDefaultsRequiredBanner } from "@/components/telemedicine-zoom-defaults-banner"
 import { useTelemedicineZoomDefaults } from "@/lib/hooks/use-telemedicine-zoom-defaults"
-import { PatientEncounterForm } from "@/components/patient-encounter-form"
-import { DispenseMedicationDialog } from "@/components/dispense-medication-dialog"
-import { AddTriageForm } from "@/components/add-triage-form"
-import { ViewBillDialog } from "@/components/view-bill-dialog"
+import dynamic from "next/dynamic"
 import { AddToQueueForm } from "@/components/add-to-queue-form"
 import { useAuth } from "@/lib/auth/auth-context"
 import { useTelemedicineFloating } from "@/lib/telemedicine-floating-context"
@@ -64,6 +61,23 @@ import {
   type QueueEntryLite,
 } from "@/components/queue-radiology-report-dialog"
 import { ProcedureQueueCompleteDialog } from "@/components/queue-procedure-complete-dialog"
+
+const PatientEncounterForm = dynamic(
+  () => import("@/components/patient-encounter-form").then((m) => m.PatientEncounterForm),
+  { ssr: false, loading: () => null }
+)
+const DispenseMedicationDialog = dynamic(
+  () => import("@/components/dispense-medication-dialog").then((m) => m.DispenseMedicationDialog),
+  { ssr: false, loading: () => null }
+)
+const AddTriageForm = dynamic(
+  () => import("@/components/add-triage-form").then((m) => m.AddTriageForm),
+  { ssr: false, loading: () => null }
+)
+const ViewBillDialog = dynamic(
+  () => import("@/components/view-bill-dialog").then((m) => m.ViewBillDialog),
+  { ssr: false, loading: () => null }
+)
 
 interface QueueDisplayProps {
   initialServicePoint?: ServicePoint
@@ -184,11 +198,9 @@ export function QueueDisplay({ initialServicePoint = "triage", restrictToSingleS
   // Check if we need to show the "More" dropdown
   const showMoreDropdown = dropdownTabs.length > 0
 
-  // Load queue counts for all allowed service points
-  // Note: do NOT gate on `!menuAccess` — on menu-access API failure, menuAccess is null but we still
-  // show all service points (see allowedServicePoints above). Skipping here caused intermittent "no API"
-  // when the role menu call failed or was slow.
+  // Load queue counts for all allowed service points (skip when single-point dashboard — QueueContent already loads)
   useEffect(() => {
+    if (restrictToSingleServicePoint) return
     if (menuLoading || effectiveAllowedServicePoints.length === 0) return
 
     const loadQueueCounts = async () => {
@@ -229,7 +241,7 @@ export function QueueDisplay({ initialServicePoint = "triage", restrictToSingleS
     // Waiting time is calculated client-side using arrivalTime, so frequent polling is unnecessary
     const interval = setInterval(loadQueueCounts, 600000)
     return () => clearInterval(interval)
-  }, [effectiveAllowedServicePoints, menuLoading, menuAccess])
+  }, [effectiveAllowedServicePoints, menuLoading, menuAccess, restrictToSingleServicePoint])
 
   return (
     <Card className="h-full">
@@ -357,7 +369,7 @@ function QueueContent({
   const [procedureQueueForComplete, setProcedureQueueForComplete] = useState<QueueEntryLite | null>(null)
   const [telemedicineStartingQueueId, setTelemedicineStartingQueueId] = useState<number | string | null>(null)
   const [pendingTelemedicineEntry, setPendingTelemedicineEntry] = useState<any>(null)
-  const [telemedicineVideoProvider, setTelemedicineVideoProvider] = useState<TelemedicineVideoProviderId>("zoom_manual")
+  const [telemedicineVideoProvider, setTelemedicineVideoProvider] = useState<TelemedicineVideoProviderId>("daily")
   const [telemedicineMeetingUrl, setTelemedicineMeetingUrl] = useState("")
   const [telemedicineMeetingPasscode, setTelemedicineMeetingPasscode] = useState("")
   const { user } = useAuth()
@@ -365,8 +377,10 @@ function QueueContent({
   const { loading: zoomDefaultsLoading, hasDefaults: hasZoomDefaults } = useTelemedicineZoomDefaults()
   const selectedProviderNeedsZoomDefaults =
     isZoomProvider(telemedicineVideoProvider) && !telemedicineMeetingUrl.trim()
-  const selectedProviderNeedsMeetingLink =
-    !isZoomProvider(telemedicineVideoProvider) && !telemedicineMeetingUrl.trim()
+  const selectedProviderNeedsMeetingLink = providerRequiresPastedMeetingLink(
+    telemedicineVideoProvider,
+    telemedicineMeetingUrl
+  )
   const canStartNewTelemedicineVisit =
     !selectedProviderNeedsMeetingLink &&
     (!selectedProviderNeedsZoomDefaults || (!zoomDefaultsLoading && hasZoomDefaults))
@@ -513,8 +527,8 @@ function QueueContent({
       toast({
         title: "Meeting link required",
         description: selectedProviderNeedsMeetingLink
-          ? "Paste a Google Meet link before starting this session."
-          : "Save Telemedicine → My Zoom defaults, paste a Zoom link, or choose Google Meet and paste a Meet link.",
+          ? "Paste a Google Meet / Teams / other meeting link, or choose Daily.co (default) which creates a room automatically."
+          : "Save Telemedicine → My Zoom defaults, paste a Zoom link, or switch to Daily.co.",
         variant: "destructive",
       })
       return
@@ -565,9 +579,10 @@ function QueueContent({
             },
       )
       if (created?.sessionId) {
-        const externalMeetingHref = !isZoomProvider(telemedicineVideoProvider)
-          ? meetingHrefFromUrl(created.zoomJoinUrl || telemedicineMeetingUrl)
-          : ""
+        const externalMeetingHref =
+          !isZoomProvider(telemedicineVideoProvider) && !isDailyProvider(telemedicineVideoProvider)
+            ? meetingHrefFromUrl(created.zoomJoinUrl || telemedicineMeetingUrl)
+            : ""
         const patientDisplayName =
           entry.patientFirstName && entry.patientLastName
             ? `${entry.patientFirstName} ${entry.patientLastName}`.trim()
@@ -583,9 +598,11 @@ function QueueContent({
         toast(
           telemedicineCreateToast(created, {
             title: "Telemedicine session ready",
-            description: externalMeetingHref
-              ? "Google Meet opened in a new browser tab. The HMIS session panel is also available for consent and documentation."
-              : "Use the floating panel — minimize it to browse charts or notes.",
+            description: isDailyProvider(telemedicineVideoProvider)
+              ? "Daily.co room is ready in the floating panel — join in-page video there."
+              : externalMeetingHref
+                ? "Meeting opened in a new browser tab. The HMIS session panel is also available for consent and documentation."
+                : "Use the floating panel — minimize it to browse charts or notes.",
           }),
         )
         setPendingTelemedicineEntry(null)
@@ -1263,7 +1280,9 @@ function QueueContent({
               onPasscodeChange={setTelemedicineMeetingPasscode}
             />
             {selectedProviderNeedsMeetingLink && (
-              <p className="text-sm text-destructive">Paste a Google Meet link before starting.</p>
+              <p className="text-sm text-destructive">
+                Paste a meeting link for Meet / Teams / Other, or keep Daily.co selected (no link needed).
+              </p>
             )}
           </div>
           <DialogFooter>
@@ -1275,12 +1294,14 @@ function QueueContent({
               onClick={() => {
                 if (!pendingTelemedicineEntry) return
                 const meetWindow =
-                  !isZoomProvider(telemedicineVideoProvider) && telemedicineMeetingUrl.trim()
+                  !isZoomProvider(telemedicineVideoProvider) &&
+                  !isDailyProvider(telemedicineVideoProvider) &&
+                  telemedicineMeetingUrl.trim()
                     ? window.open("about:blank", "_blank")
                     : null
                 if (meetWindow) {
-                  meetWindow.document.title = "Opening Google Meet..."
-                  meetWindow.document.body.innerHTML = "Opening Google Meet..."
+                  meetWindow.document.title = "Opening meeting..."
+                  meetWindow.document.body.innerHTML = "Opening meeting..."
                 }
                 void handleStartTelemedicine(pendingTelemedicineEntry, meetWindow)
               }}

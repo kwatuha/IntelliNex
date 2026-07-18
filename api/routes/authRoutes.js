@@ -33,6 +33,84 @@ async function getPrivilegesByRole(roleId) {
     }
 }
 
+function parseLandingConfig(config) {
+    if (!config) return null;
+    let quickLinks = [];
+    if (config.landingQuickLinks) {
+        try {
+            quickLinks = typeof config.landingQuickLinks === 'string'
+                ? JSON.parse(config.landingQuickLinks)
+                : config.landingQuickLinks;
+            if (!Array.isArray(quickLinks)) quickLinks = [];
+        } catch {
+            quickLinks = [];
+        }
+    }
+    return {
+        type: config.landingPageType || 'dashboard',
+        label: config.landingPageLabel || null,
+        url: config.landingPageUrl || null,
+        icon: config.landingPageIcon || 'Home',
+        description: config.landingPageDescription || null,
+        servicePoint: config.defaultServicePoint || null,
+        quickLinks,
+    };
+}
+
+async function getDashboardCardsByRole(roleId) {
+    if (!roleId) return null;
+    try {
+        const [cardRows] = await pool.query(
+            `SELECT cardId, isVisible FROM role_dashboard_cards WHERE roleId = ?`,
+            [roleId]
+        );
+        if (cardRows.length === 0) return null;
+        const dashboardCards = {};
+        cardRows.forEach((row) => {
+            dashboardCards[row.cardId] = row.isVisible;
+        });
+        return dashboardCards;
+    } catch (error) {
+        console.error('[AUTH] Error fetching dashboard cards:', error);
+        return null;
+    }
+}
+
+/**
+ * Privileges, branches, dashboard cards, and landing config in parallel.
+ * Landing fields come from the roles join on the user row when present.
+ */
+async function loadAuthSessionExtras(user) {
+    const [privileges, branchContext, dashboardCards] = await Promise.all([
+        getPrivilegesByRole(user.roleId),
+        getUserBranchContext(pool, user.userId),
+        getDashboardCardsByRole(user.roleId),
+    ]);
+
+    let landingConfig = null;
+    if (user.roleId) {
+        // Landing columns are included via roles JOIN on the user SELECT.
+        landingConfig = parseLandingConfig(user);
+    }
+
+    return { privileges, branchContext, dashboardCards, landingConfig };
+}
+
+const USER_AUTH_SELECT = `
+    SELECT
+        u.*,
+        r.roleName AS role,
+        r.landingPageType,
+        r.landingPageLabel,
+        r.landingPageUrl,
+        r.landingPageIcon,
+        r.landingPageDescription,
+        r.defaultServicePoint,
+        r.landingQuickLinks
+    FROM users u
+    LEFT JOIN roles r ON u.roleId = r.roleId
+`;
+
 /**
  * @route   POST /api/auth/login
  * @desc    Authenticate user & get token
@@ -47,11 +125,7 @@ router.post('/login', async (req, res) => {
 
     try {
         const query = `
-            SELECT 
-                u.*, 
-                r.roleName AS role
-            FROM users u
-            LEFT JOIN roles r ON u.roleId = r.roleId
+            ${USER_AUTH_SELECT}
             WHERE (u.username = ? OR u.email = ?) AND u.voided = 0 AND u.isActive = 1
         `;
         const [users] = await pool.execute(query, [username, username]);
@@ -68,87 +142,13 @@ router.post('/login', async (req, res) => {
             return res.status(400).json({ error: 'Invalid credentials' });
         }
 
-        // Get user privileges
-        const privileges = await getPrivilegesByRole(user.roleId);
-        const branchContext = await getUserBranchContext(pool, user.userId);
+        const { privileges, branchContext, dashboardCards, landingConfig } =
+            await loadAuthSessionExtras(user);
 
-        // Get role dashboard card visibility configuration
-        let dashboardCards = null;
-        if (user.roleId) {
-            try {
-                const [cardRows] = await pool.query(
-                    `SELECT cardId, isVisible 
-                     FROM role_dashboard_cards 
-                     WHERE roleId = ?`,
-                    [user.roleId]
-                );
-                if (cardRows.length > 0) {
-                    dashboardCards = {};
-                    cardRows.forEach(row => {
-                        dashboardCards[row.cardId] = row.isVisible;
-                    });
-                }
-            } catch (error) {
-                console.error('[AUTH LOGIN] Error fetching dashboard cards:', error);
-                // Continue without dashboard cards config if there's an error
-            }
-        }
-
-        // Get role landing page configuration
-        let landingConfig = null;
-        if (user.roleId) {
-            try {
-                console.log('[AUTH LOGIN] Fetching landing config for roleId:', user.roleId, 'username:', user.username);
-                const [landingRows] = await pool.query(
-                    `SELECT 
-                        landingPageType,
-                        landingPageLabel,
-                        landingPageUrl,
-                        landingPageIcon,
-                        landingPageDescription,
-                        defaultServicePoint,
-                        landingQuickLinks
-                    FROM roles 
-                    WHERE roleId = ? AND isActive = 1`,
-                    [user.roleId]
-                );
-                
-                console.log('[AUTH LOGIN] Landing config query result rows:', landingRows.length);
-                
-                if (landingRows.length > 0) {
-                    const config = landingRows[0];
-                    console.log('[AUTH LOGIN] Raw config from DB:', config);
-                    let quickLinks = [];
-                    if (config.landingQuickLinks) {
-                        try {
-                            quickLinks = typeof config.landingQuickLinks === 'string' ? JSON.parse(config.landingQuickLinks) : config.landingQuickLinks;
-                            if (!Array.isArray(quickLinks)) quickLinks = [];
-                        } catch (e) { quickLinks = []; }
-                    }
-                    landingConfig = {
-                        type: config.landingPageType || 'dashboard',
-                        label: config.landingPageLabel || null,
-                        url: config.landingPageUrl || null,
-                        icon: config.landingPageIcon || 'Home',
-                        description: config.landingPageDescription || null,
-                        servicePoint: config.defaultServicePoint || null,
-                        quickLinks: quickLinks
-                    };
-                    console.log('[AUTH LOGIN] Transformed landingConfig:', landingConfig);
-                } else {
-                    console.log('[AUTH LOGIN] No landing config found for roleId:', user.roleId);
-                }
-            } catch (error) {
-                console.error('[AUTH LOGIN] Error fetching landing config:', error);
-                // Continue without landing config if there's an error
-            }
-        }
-
-        // Update last login
-        await pool.execute(
-            'UPDATE users SET lastLogin = NOW() WHERE userId = ?',
-            [user.userId]
-        );
+        // Don't block the response on lastLogin write
+        pool.execute('UPDATE users SET lastLogin = NOW() WHERE userId = ?', [user.userId]).catch((err) => {
+            console.warn('[AUTH LOGIN] lastLogin update failed:', err.message || err);
+        });
 
         // Create JWT payload
         const payload = {
@@ -309,11 +309,9 @@ router.get('/verify', async (req, res) => {
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
         
-        // Get fresh user data
+        // Get fresh user data (include landing fields to avoid a second roles query)
         const [users] = await pool.execute(
-            `SELECT u.*, r.roleName AS role
-             FROM users u
-             LEFT JOIN roles r ON u.roleId = r.roleId
+            `${USER_AUTH_SELECT}
              WHERE u.userId = ? AND u.voided = 0 AND u.isActive = 1`,
             [decoded.user.id]
         );
@@ -323,80 +321,8 @@ router.get('/verify', async (req, res) => {
         }
 
         const user = users[0];
-        const privileges = await getPrivilegesByRole(user.roleId);
-        const branchContext = await getUserBranchContext(pool, user.userId);
-
-        // Get role dashboard card visibility configuration
-        let dashboardCards = null;
-        if (user.roleId) {
-            try {
-                const [cardRows] = await pool.query(
-                    `SELECT cardId, isVisible 
-                     FROM role_dashboard_cards 
-                     WHERE roleId = ?`,
-                    [user.roleId]
-                );
-                if (cardRows.length > 0) {
-                    dashboardCards = {};
-                    cardRows.forEach(row => {
-                        dashboardCards[row.cardId] = row.isVisible;
-                    });
-                }
-            } catch (error) {
-                console.error('[AUTH VERIFY] Error fetching dashboard cards:', error);
-                // Continue without dashboard cards config if there's an error
-            }
-        }
-
-        // Get role landing page configuration
-        let landingConfig = null;
-        if (user.roleId) {
-            try {
-                console.log('[AUTH VERIFY] Fetching landing config for roleId:', user.roleId, 'username:', user.username);
-                const [landingRows] = await pool.query(
-                    `SELECT 
-                        landingPageType,
-                        landingPageLabel,
-                        landingPageUrl,
-                        landingPageIcon,
-                        landingPageDescription,
-                        defaultServicePoint,
-                        landingQuickLinks
-                    FROM roles 
-                    WHERE roleId = ? AND isActive = 1`,
-                    [user.roleId]
-                );
-                
-                console.log('[AUTH VERIFY] Landing config query result rows:', landingRows.length);
-                
-                if (landingRows.length > 0) {
-                    const config = landingRows[0];
-                    console.log('[AUTH VERIFY] Raw config from DB:', config);
-                    let quickLinks = [];
-                    if (config.landingQuickLinks) {
-                        try {
-                            quickLinks = typeof config.landingQuickLinks === 'string' ? JSON.parse(config.landingQuickLinks) : config.landingQuickLinks;
-                            if (!Array.isArray(quickLinks)) quickLinks = [];
-                        } catch (e) { quickLinks = []; }
-                    }
-                    landingConfig = {
-                        type: config.landingPageType || 'dashboard',
-                        label: config.landingPageLabel || null,
-                        url: config.landingPageUrl || null,
-                        icon: config.landingPageIcon || 'Home',
-                        description: config.landingPageDescription || null,
-                        servicePoint: config.defaultServicePoint || null,
-                        quickLinks: quickLinks
-                    };
-                    console.log('[AUTH VERIFY] Transformed landingConfig:', landingConfig);
-                } else {
-                    console.log('[AUTH VERIFY] No landing config found for roleId:', user.roleId);
-                }
-            } catch (error) {
-                console.error('[AUTH VERIFY] Error fetching landing config:', error);
-                // Continue without landing config if there's an error
-            }
-        }
+        const { privileges, branchContext, dashboardCards, landingConfig } =
+            await loadAuthSessionExtras(user);
 
         res.json({
             user: {

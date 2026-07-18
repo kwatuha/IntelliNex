@@ -139,13 +139,27 @@ export function DrugMovement() {
   )
 
   const loadBaseData = useCallback(async () => {
-    const [storeData, medicationData] = await Promise.all([
-      pharmacyApi.getDrugStores(undefined, undefined, "1"),
-      pharmacyApi.getMedications(undefined, 1, 500),
-    ])
-    setStores(storeData || [])
-    setMedications(medicationData || [])
-  }, [])
+    try {
+      const [storeData, medicationData] = await Promise.all([
+        pharmacyApi.getDrugStores(undefined, undefined, "true"),
+        pharmacyApi.getMedications(undefined, 1, 500),
+      ])
+      setStores(storeData || [])
+      setMedications(medicationData || [])
+      if (!(storeData || []).length) {
+        toast({
+          title: "No stores found",
+          description: "Add drug stores under Settings → Drug Stores before creating transfers.",
+        })
+      }
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to load stores and medications",
+        variant: "destructive",
+      })
+    }
+  }, [toast])
 
   const loadTransfers = useCallback(async () => {
     try {

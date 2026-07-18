@@ -80,7 +80,7 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
 
   const [telemedicineModalOpen, setTelemedicineModalOpen] = useState(false)
   const [startingTelemedicine, setStartingTelemedicine] = useState(false)
-  const [telemedicineVideoProvider, setTelemedicineVideoProvider] = useState<TelemedicineVideoProviderId>("zoom_manual")
+  const [telemedicineVideoProvider, setTelemedicineVideoProvider] = useState<TelemedicineVideoProviderId>("daily")
   const [telemedicineMeetingUrl, setTelemedicineMeetingUrl] = useState("")
   const [telemedicineMeetingPasscode, setTelemedicineMeetingPasscode] = useState("")
   const selectedProviderNeedsZoomDefaults =
@@ -142,6 +142,7 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
     testTypeId: "",
     priority: "routine",
     clinicalIndication: "",
+    orderDate: new Date().toISOString().split('T')[0],
   })
   const [savingLabOrder, setSavingLabOrder] = useState(false)
 
@@ -192,6 +193,7 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
     chargeId: "",
     quantity: 1,
     notes: "",
+    orderDate: new Date().toISOString().split('T')[0],
   })
   const [savingOrder, setSavingOrder] = useState(false)
   const [orderToDelete, setOrderToDelete] = useState<any>(null)
@@ -1005,7 +1007,7 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
           patientId: parseInt(patientId.toString()),
           admissionId: admissionId,
           orderedBy: parseInt(userId.toString()),
-          orderDate: new Date().toISOString().split('T')[0],
+          orderDate: labOrderForm.orderDate || new Date().toISOString().split('T')[0],
           priority: labOrderForm.priority,
           clinicalIndication: labOrderForm.clinicalIndication || null,
           items: [{
@@ -1030,6 +1032,7 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
         testTypeId: "",
         priority: "routine",
         clinicalIndication: "",
+        orderDate: new Date().toISOString().split('T')[0],
       })
       await loadOverview(false)
     } catch (error: any) {
@@ -1220,12 +1223,14 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
           description: "Order updated successfully",
         })
       } else {
+        const orderDateValue = orderForm.orderDate || new Date().toISOString().split('T')[0]
+        const orderDateObj = new Date(`${orderDateValue}T00:00:00`)
         // Create invoice for the order
         const invoiceData = {
           patientId: patientId,
           admissionId: admissionId,
-          invoiceDate: new Date().toISOString().split('T')[0],
-          dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          invoiceDate: orderDateValue,
+          dueDate: new Date(orderDateObj.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
           status: 'pending',
           items: [{
             description: consumable.name || 'Consumable',
@@ -1250,6 +1255,7 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
         chargeId: "",
         quantity: 1,
         notes: "",
+        orderDate: new Date().toISOString().split('T')[0],
       })
       loadOverview()
     } catch (error: any) {
@@ -1274,6 +1280,9 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
         chargeId: item.chargeId?.toString() || "",
         quantity: item.quantity || 1,
         notes: invoice.notes?.replace('Consumables ordered during inpatient stay.', '').trim() || "",
+        orderDate: invoice.invoiceDate
+          ? new Date(invoice.invoiceDate).toISOString().split('T')[0]
+          : new Date().toISOString().split('T')[0],
       })
       setOrderDialogOpen(true)
     } catch (error: any) {
@@ -1755,6 +1764,9 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
         testTypeId: testTypeId,
         priority: fullOrder.priority || "routine",
         clinicalIndication: fullOrder.clinicalIndication || "",
+        orderDate: fullOrder.orderDate
+          ? new Date(fullOrder.orderDate).toISOString().split('T')[0]
+          : new Date().toISOString().split('T')[0],
       })
       setLabOrderDialogOpen(true)
     } catch (error: any) {
@@ -3371,6 +3383,7 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
                     testTypeId: "",
                     priority: "routine",
                     clinicalIndication: "",
+                    orderDate: new Date().toISOString().split('T')[0],
                   })
                 }
               }}>
@@ -3383,6 +3396,14 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
                     <DialogDescription>{editingLabOrder ? "Update lab order details" : "Create a new lab order for this patient"}</DialogDescription>
                   </DialogHeader>
                   <div className="space-y-4">
+                    <div>
+                      <Label>Order Date *</Label>
+                      <Input
+                        type="date"
+                        value={labOrderForm.orderDate || new Date().toISOString().split('T')[0]}
+                        onChange={(e) => setLabOrderForm({ ...labOrderForm, orderDate: e.target.value || new Date().toISOString().split('T')[0] })}
+                      />
+                    </div>
                     <div>
                       <Label>Test Type *</Label>
                       <TestTypeCombobox
@@ -3426,6 +3447,7 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
                           testTypeId: "",
                           priority: "routine",
                           clinicalIndication: "",
+                          orderDate: new Date().toISOString().split('T')[0],
                         })
                       }}>Cancel</Button>
                       <Button onClick={handleSaveLabOrder} disabled={savingLabOrder}>
@@ -3514,6 +3536,7 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
                     chargeId: "",
                     quantity: 1,
                     notes: "",
+                    orderDate: new Date().toISOString().split('T')[0],
                   })
                 }
               }}>
@@ -3526,6 +3549,14 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
                     <DialogDescription>{editingOrder ? "Update consumable order" : "Order consumables/medical supplies for this patient"}</DialogDescription>
                   </DialogHeader>
                   <div className="space-y-4">
+                    <div>
+                      <Label>Order Date *</Label>
+                      <Input
+                        type="date"
+                        value={orderForm.orderDate || new Date().toISOString().split('T')[0]}
+                        onChange={(e) => setOrderForm({ ...orderForm, orderDate: e.target.value || new Date().toISOString().split('T')[0] })}
+                      />
+                    </div>
                     <div>
                       <Label>Consumable *</Label>
                       <Select
@@ -3589,6 +3620,7 @@ export function InpatientManagement({ admissionId, open, onOpenChange, onAdmissi
                           chargeId: "",
                           quantity: 1,
                           notes: "",
+                          orderDate: new Date().toISOString().split('T')[0],
                         })
                       }}>Cancel</Button>
                       <Button onClick={handleSaveOrder} disabled={savingOrder}>

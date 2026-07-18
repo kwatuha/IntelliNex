@@ -36,6 +36,7 @@ import {
   Ambulance,
   Video,
   Truck,
+  Smartphone,
 } from "lucide-react"
 
 export interface NavigationItem {
@@ -96,6 +97,12 @@ export const navigationCategories: NavigationCategory[] = [
         title: "Regional Dashboard",
         icon: MapPin,
         href: "/regional-dashboard",
+      },
+      {
+        title: "Facility Performance",
+        icon: Building2,
+        href: "/facility-performance",
+        description: "Compare patients, queues, revenue and stock across hospital branches",
       },
     ],
   },
@@ -247,6 +254,27 @@ export const navigationCategories: NavigationCategory[] = [
         icon: Video,
         href: "/telemedicine",
         description: "Remote video visits (Zoom, Google Meet, and link mode)",
+        group: "Support & outreach",
+      },
+      {
+        title: "Field datasets",
+        icon: ClipboardList,
+        href: "/field-datasets",
+        description: "Surveillance forms and special datasets for the IntelliNex Field mobile app",
+        group: "Support & outreach",
+      },
+      {
+        title: "Field app",
+        icon: Smartphone,
+        href: "/field-app",
+        description: "Download the IntelliNex Field Android APK",
+        group: "Support & outreach",
+      },
+      {
+        title: "Field app usage",
+        icon: BarChart3,
+        href: "/field-app-usage",
+        description: "APK downloads and Field app login/sync activity",
         group: "Support & outreach",
       },
     ],

@@ -89,6 +89,10 @@ async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promis
           : 'Request was cancelled.'
       );
     }
+    const msg = err?.message || String(err);
+    if (/failed to fetch|networkerror|load failed|network request failed/i.test(msg)) {
+      throw new Error('Unable to reach the server. Retrying usually works if the connection is busy.');
+    }
     throw err;
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
@@ -120,7 +124,7 @@ async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promis
 
 // Patient API
 export const patientApi = {
-  getAll: (search?: string, page = 1, limit = 50) =>
+  getAll: (search?: string, page = 1, limit = 25) =>
     apiRequest<any[]>(`/api/patients?${new URLSearchParams({ page: page.toString(), limit: limit.toString(), ...(search && { search }) })}`),
 
   getById: (id: string) =>
@@ -150,6 +154,28 @@ export const patientApi = {
 
   deleteAllergy: (patientId: string, allergyId: string) =>
     apiRequest<any>(`/api/patients/${patientId}/allergies/${allergyId}`, { method: 'DELETE' }),
+
+  // Patient NCD care
+  getNcd: (patientId: string) =>
+    apiRequest<{ conditions: any[]; followUps: any[] }>(`/api/patients/${patientId}/ncd`),
+
+  createNcdCondition: (patientId: string, data: any) =>
+    apiRequest<any>(`/api/patients/${patientId}/ncd/conditions`, { method: 'POST', body: data }),
+
+  updateNcdCondition: (patientId: string, ncdId: string, data: any) =>
+    apiRequest<any>(`/api/patients/${patientId}/ncd/conditions/${ncdId}`, { method: 'PUT', body: data }),
+
+  deleteNcdCondition: (patientId: string, ncdId: string) =>
+    apiRequest<any>(`/api/patients/${patientId}/ncd/conditions/${ncdId}`, { method: 'DELETE' }),
+
+  createNcdFollowUp: (patientId: string, data: any) =>
+    apiRequest<any>(`/api/patients/${patientId}/ncd/follow-ups`, { method: 'POST', body: data }),
+
+  updateNcdFollowUp: (patientId: string, followUpId: string, data: any) =>
+    apiRequest<any>(`/api/patients/${patientId}/ncd/follow-ups/${followUpId}`, { method: 'PUT', body: data }),
+
+  deleteNcdFollowUp: (patientId: string, followUpId: string) =>
+    apiRequest<any>(`/api/patients/${patientId}/ncd/follow-ups/${followUpId}`, { method: 'DELETE' }),
 
         // Patient vitals
         getVitals: (patientId: string, today?: boolean, date?: string) => {
@@ -1184,12 +1210,23 @@ export const telemedicineApi = {
   updateMyDefaults: (data: { defaultZoomJoinUrl?: string | null; defaultZoomPassword?: string | null }) =>
     apiRequest<any>('/api/telemedicine/my-defaults', { method: 'PUT', body: data }),
 
+  getAnalytics: (period: 'daily' | 'weekly' | 'monthly' = 'monthly') =>
+    apiRequest<any>(`/api/telemedicine/analytics?${new URLSearchParams({ period })}`),
+
+  listQueue: () =>
+    apiRequest<any[]>('/api/telemedicine/queue'),
+
   /**
    * Paginated list. Default: doctors see own sessions; admins see all.
    * `scope: 'facility'` — nurses/doctors/admins see facility-wide list (for boards / handoff).
-   * `statusGroup: 'active' | 'ended'` — filter by session lifecycle.
+   * `statusGroup` filters by session lifecycle.
    */
-  listSessions: (params?: { page?: number; limit?: number; scope?: 'facility'; statusGroup?: 'active' | 'ended' }) => {
+  listSessions: (params?: {
+    page?: number
+    limit?: number
+    scope?: 'facility'
+    statusGroup?: 'active' | 'pending' | 'in_progress' | 'ended'
+  }) => {
     const q = new URLSearchParams();
     if (params?.page != null) q.set('page', String(params.page));
     if (params?.limit != null) q.set('limit', String(params.limit));
@@ -1244,6 +1281,16 @@ export const telemedicineApi = {
   /** True when API has ZOOM_MEETING_SDK_KEY + ZOOM_MEETING_SDK_SECRET (embedded Component View). */
   getZoomMeetingSdkStatus: () =>
     apiRequest<{ configured: boolean }>('/api/telemedicine/zoom-meeting-sdk-status'),
+
+  getDailyStatus: () =>
+    apiRequest<{ configured: boolean }>('/api/telemedicine/daily-status'),
+
+  /** Create a Daily room for this session if zoomJoinUrl is empty. */
+  ensureDailyRoom: (sessionId: string) =>
+    apiRequest<{ sessionId: number; provider: string; zoomJoinUrl: string; created: boolean }>(
+      `/api/telemedicine/sessions/${sessionId}/ensure-daily-room`,
+      { method: 'POST', timeoutMs: 30000 }
+    ),
 
   /** Server-generated Meeting SDK JWT for ZoomMtgEmbedded.join — never sign in the browser. */
   getZoomSdkSignature: (sessionId: string, body?: { role?: 0 | 1 }) =>
@@ -1606,6 +1653,20 @@ export const dashboardApi = {
 
   getRecentActivities: (limit?: number) =>
     apiRequest<any>(`/api/dashboard/recent-activities?${new URLSearchParams({ ...(limit && { limit: limit.toString() }) })}`),
+
+  getFacilityPerformance: (params?: { days?: number; branchId?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.days) query.append('days', String(params.days));
+    if (params?.branchId) query.append('branchId', params.branchId);
+    const qs = query.toString();
+    return apiRequest<{
+      days: number;
+      generatedAt: string;
+      facilities: any[];
+      totals: Record<string, number>;
+      transfers?: any[];
+    }>(`/api/dashboard/facility-performance${qs ? `?${qs}` : ''}`);
+  },
 };
 
 // Analytics API
@@ -1778,6 +1839,25 @@ export const billingApi = {
 
   recordPayment: (id: string, data: any) =>
     apiRequest<any>(`/api/billing/invoices/${id}/payment`, { method: 'POST', body: data }),
+
+  /** Cloudsasa M-Pesa STK Push */
+  getMpesaConfig: () => apiRequest<{ configured: boolean; callbackConfigured: boolean }>('/api/billing/mpesa/config'),
+
+  initiateMpesaStk: (data: {
+    amount: number;
+    phone: string;
+    patientId?: number;
+    allocations: { invoiceId: number; amount: number; invoiceNumber?: string }[];
+    batchReceiptNumber?: string;
+  }) => apiRequest<any>('/api/billing/mpesa/stk-push', { method: 'POST', body: data }),
+
+  getMpesaStkStatus: (checkoutRequestId: string) =>
+    apiRequest<any>(`/api/billing/mpesa/stk-status/${encodeURIComponent(checkoutRequestId)}`),
+
+  finalizeMpesaStk: (checkoutRequestId: string) =>
+    apiRequest<any>(`/api/billing/mpesa/finalize/${encodeURIComponent(checkoutRequestId)}`, {
+      method: 'POST',
+    }),
 
   getInvoiceStats: () =>
     apiRequest<any>('/api/billing/invoices/stats/summary'),
@@ -2663,4 +2743,97 @@ export const nursingApi = {
       `/api/nursing/pickup-requests/${pickupId}/cancel`,
       { method: 'POST' }
     ),
+};
+
+/** Field / surveillance datasets (IntelliNex Field mobile companion). */
+export const dataCollectionApi = {
+  listTemplates: (params?: { category?: string; includeInactive?: boolean }) => {
+    const search = new URLSearchParams()
+    if (params?.category) search.set('category', params.category)
+    if (params?.includeInactive) search.set('includeInactive', '1')
+    const q = search.toString()
+    return apiRequest<any[]>(`/api/data-collection/templates${q ? `?${q}` : ''}`)
+  },
+  getTemplate: (id: number | string) =>
+    apiRequest<any>(`/api/data-collection/templates/${id}`),
+  createTemplate: (data: any) =>
+    apiRequest<any>('/api/data-collection/templates', { method: 'POST', body: data }),
+  updateTemplate: (id: number | string, data: any) =>
+    apiRequest<any>(`/api/data-collection/templates/${id}`, { method: 'PATCH', body: data }),
+  deleteTemplate: (id: number | string) =>
+    apiRequest<{ ok: boolean }>(`/api/data-collection/templates/${id}`, { method: 'DELETE' }),
+  listSubmissions: (params?: { templateId?: number; mine?: boolean; limit?: number }) => {
+    const search = new URLSearchParams()
+    if (params?.templateId) search.set('templateId', String(params.templateId))
+    if (params?.mine) search.set('mine', '1')
+    if (params?.limit) search.set('limit', String(params.limit))
+    const q = search.toString()
+    return apiRequest<any[]>(`/api/data-collection/submissions${q ? `?${q}` : ''}`)
+  },
+  createSubmission: (data: any) =>
+    apiRequest<any>('/api/data-collection/submissions', { method: 'POST', body: data }),
+};
+
+/** IntelliNex Field Android APK release / download. */
+export const mobileAppApi = {
+  getRelease: () =>
+    apiRequest<{ available: boolean; release: any | null; isNewForUser?: boolean }>(
+      '/api/mobile-app/release'
+    ),
+  getUsageReport: () =>
+    apiRequest<{
+      currentRelease: any | null
+      summary: Record<string, number>
+      versionBreakdown: any[]
+      users: any[]
+      recentEvents: any[]
+    }>('/api/mobile-app/usage'),
+  dismissRelease: () =>
+    apiRequest<{ ok: boolean; dismissed: boolean }>('/api/mobile-app/release/dismiss', {
+      method: 'POST',
+      body: {},
+    }),
+  /** Build authenticated download URL for browser <a download>. */
+  getDownloadHref: () => {
+    if (typeof window === 'undefined') return '/api/mobile-app/download'
+    const token =
+      localStorage.getItem('token') ||
+      localStorage.getItem('jwt_token') ||
+      localStorage.getItem('auth_token') ||
+      ''
+    const base = (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_URL) || ''
+    const q = token ? `?access_token=${encodeURIComponent(token)}` : ''
+    return `${base}/api/mobile-app/download${q}`
+  },
+  uploadRelease: async (file: File, version: string, releaseNotes?: string) => {
+    const token =
+      typeof window !== 'undefined'
+        ? localStorage.getItem('token') ||
+          localStorage.getItem('jwt_token') ||
+          localStorage.getItem('auth_token')
+        : null
+    const base = (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_URL) || ''
+    const form = new FormData()
+    form.append('file', file)
+    form.append('version', version)
+    if (releaseNotes) form.append('releaseNotes', releaseNotes)
+    const res = await fetch(`${base}/api/mobile-app/upload`, {
+      method: 'POST',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: form,
+    })
+    if (!res.ok) {
+      const raw = await res.text()
+      let msg = res.statusText
+      try {
+        msg = JSON.parse(raw)?.error || msg
+      } catch {
+        if (raw) msg = raw.slice(0, 200)
+      }
+      throw new Error(msg || 'Upload failed')
+    }
+    return res.json() as Promise<{ ok: boolean; release: any }>
+  },
 };

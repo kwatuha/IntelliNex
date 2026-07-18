@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
+const { notifyAppointmentScheduled, notifyAppointmentUpdated } = require('../lib/patientSms');
 
 router.get('/', async (req, res) => {
     try {
@@ -102,9 +103,25 @@ router.post('/', async (req, res) => {
         );
 
         const [newAppointment] = await pool.execute(
-            'SELECT * FROM appointments WHERE appointmentId = ?',
+            `SELECT a.*,
+                    u.firstName as doctorFirstName, u.lastName as doctorLastName
+             FROM appointments a
+             LEFT JOIN users u ON a.doctorId = u.userId
+             WHERE a.appointmentId = ?`,
             [result.insertId]
         );
+
+        if (patientId) {
+            const docName = [newAppointment[0]?.doctorFirstName, newAppointment[0]?.doctorLastName]
+                .filter(Boolean)
+                .join(' ');
+            notifyAppointmentScheduled(patientId, {
+                appointmentDate,
+                appointmentTime,
+                department,
+                doctorName: docName || null,
+            });
+        }
 
         res.status(201).json(newAppointment[0]);
     } catch (error) {
@@ -140,6 +157,21 @@ router.put('/:id', async (req, res) => {
             'SELECT * FROM appointments WHERE appointmentId = ?',
             [req.params.id]
         );
+
+        if (updated[0]?.patientId) {
+            const body = req.body || {};
+            if (
+                body.status !== undefined ||
+                body.appointmentDate !== undefined ||
+                body.appointmentTime !== undefined
+            ) {
+                notifyAppointmentUpdated(updated[0].patientId, {
+                    status: updated[0].status,
+                    appointmentDate: updated[0].appointmentDate,
+                    appointmentTime: updated[0].appointmentTime,
+                });
+            }
+        }
 
         res.status(200).json(updated[0]);
     } catch (error) {

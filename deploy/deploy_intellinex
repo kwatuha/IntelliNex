@@ -1,0 +1,9 @@
+./deploy/deploy-full-shared-mysql.sh
+# or
+SERVER_IP=165.22.227.234 SSH_USER=kunye SSH_KEY_PATH=~/.ssh/id_asusme \
+  ./deploy/deploy-full-shared-mysql.sh
+  
+  
+  ssh -i ~/.ssh/id_asusme kunye@165.22.227.234
+sudo cp ~/nginx-default-hmis.conf /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx

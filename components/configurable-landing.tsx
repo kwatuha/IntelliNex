@@ -102,6 +102,8 @@ export function ConfigurableLanding({ landingConfig }: ConfigurableLandingProps)
     }
   }, [config.type, config.url, router])
 
+  // Wait for auth and menu access so we don't flash a Header-only shell
+  // (SidebarTrigger requires SidebarProvider when the full shell is shown).
   if (isLoading || menuLoading) {
     return (
       <div className="flex items-center justify-center h-screen">

@@ -1,11 +1,13 @@
 "use client"
 
+import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { useTelemedicineFloating } from "@/lib/telemedicine-floating-context"
 import { TelemedicineSessionPanel } from "@/components/telemedicine-session-panel"
 import { TelemedicineEncounterPanel } from "@/components/telemedicine-encounter-panel"
-import { ExternalLink, Minus, Video, X } from "lucide-react"
+import { ExternalLink, Maximize2, Minimize2, Minus, Video, X } from "lucide-react"
+import { cn } from "@/lib/utils"
 
 /**
  * Fixed floating dock (desktop): Telemedicine / Zoom on the **left**, encounter on the **right**.
@@ -20,6 +22,7 @@ import { ExternalLink, Minus, Video, X } from "lucide-react"
 export function TelemedicineFloatingPanel() {
   const router = useRouter()
   const { sessionId, minimized, closePanel, setMinimized, patientId, patientDisplayName } = useTelemedicineFloating()
+  const [videoFocused, setVideoFocused] = useState(false)
 
   if (!sessionId) return null
 
@@ -46,7 +49,14 @@ export function TelemedicineFloatingPanel() {
       role="dialog"
       aria-label="Telemedicine session and encounter"
     >
-      <div className="relative z-[5] flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden border-b border-border bg-background shadow-2xl animate-in slide-in-from-bottom-4 fade-in-0 duration-200 lg:min-w-[min(50%,360px)] lg:max-w-none lg:flex-[1.25] lg:border-b-0 lg:border-r">
+      <div
+        className={cn(
+          "relative z-[5] flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden border-b border-border bg-background shadow-2xl animate-in slide-in-from-bottom-4 fade-in-0 duration-200 lg:border-b-0 lg:border-r",
+          videoFocused
+            ? "lg:min-w-full lg:flex-[1]"
+            : "lg:min-w-[min(50%,360px)] lg:max-w-none lg:flex-[1.25]",
+        )}
+      >
         <div className="flex shrink-0 items-center justify-between gap-2 border-b bg-muted/40 px-2 py-1.5">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <Video className="h-4 w-4 shrink-0 text-primary" />
@@ -59,6 +69,16 @@ export function TelemedicineFloatingPanel() {
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
+            <Button
+              type="button"
+              variant={videoFocused ? "secondary" : "ghost"}
+              size="icon"
+              className="h-8 w-8"
+              title={videoFocused ? "Show video and encounter side by side" : "Focus video — use the full workspace"}
+              onClick={() => setVideoFocused((focused) => !focused)}
+            >
+              {videoFocused ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </Button>
             <Button
               type="button"
               variant="ghost"
@@ -92,7 +112,12 @@ export function TelemedicineFloatingPanel() {
         </div>
       </div>
 
-      <div className="relative z-[1] flex min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden lg:min-w-[min(32%,260px)] lg:max-w-[min(42%,360px)]">
+      <div
+        className={cn(
+          "relative z-[1] min-h-0 min-w-0 flex-1 basis-0 flex-col overflow-hidden lg:min-w-[min(32%,260px)] lg:max-w-[min(42%,360px)]",
+          videoFocused ? "hidden" : "flex",
+        )}
+      >
         <TelemedicineEncounterPanel
           patientId={patientId}
           patientDisplayName={patientDisplayName}

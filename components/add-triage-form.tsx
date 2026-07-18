@@ -46,8 +46,8 @@ const triageFormSchema = z
     required_error: "Please select a doctor.",
   }),
   assignedToDepartment: z.string().optional(),
-  /** Fixed until other post-triage paths exist; not shown in UI */
-  servicePoint: z.literal("consultation"),
+  /** Post-triage destination: in-person consultation or telemedicine queue */
+  servicePoint: z.enum(["consultation", "telemedicine"]),
 })
   .superRefine((data, ctx) => {
     const s = data.systolicBP?.trim() ?? ""
@@ -446,7 +446,7 @@ export function AddTriageForm({
         priority: data.priority,
         assignedToDoctorId: data.assignedToDoctorId ? parseInt(data.assignedToDoctorId) : null,
         assignedToDepartment: data.assignedToDepartment || null,
-        servicePoint: "consultation",
+        servicePoint: data.servicePoint || "consultation",
         // Notes field hidden; preserve existing on edit, none on create
         notes: isEditing && triage ? (triage.notes ?? null) : null,
         triagedBy: user?.id ? parseInt(user.id) : 68, // Use current user ID or default to 68 (first doctor)
@@ -462,7 +462,10 @@ export function AddTriageForm({
         await triageApi.create(payload)
         toast({
           title: "Triage created",
-          description: "Triage assessment has been created successfully.",
+          description:
+            data.servicePoint === "telemedicine"
+              ? "Patient scheduled on the telemedicine queue for the assigned doctor."
+              : "Triage assessment has been created successfully.",
         })
       }
 
@@ -659,10 +662,31 @@ export function AddTriageForm({
               />
             </div>
             <p className="text-xs text-muted-foreground -mt-1">
-              Leave BP fields empty if not measured. After triage, patients are routed to <span className="font-medium">consultation</span> by default.
+              Leave BP fields empty if not measured. Choose where the patient goes after triage.
             </p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <FormField
+                control={form.control}
+                name="servicePoint"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Schedule for</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value || "consultation"}>
+                      <FormControl>
+                        <SelectTrigger className="h-9">
+                          <SelectValue placeholder="Select destination" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="consultation">In-person consultation</SelectItem>
+                        <SelectItem value="telemedicine">Telemedicine consult</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
               <FormField
                 control={form.control}
                 name="priority"
@@ -690,7 +714,7 @@ export function AddTriageForm({
                 control={form.control}
                 name="assignedToDoctorId"
                 render={({ field }) => (
-                  <FormItem>
+                  <FormItem className="md:col-span-2">
                     <FormLabel>Assigned doctor *</FormLabel>
                     <Select
                       onValueChange={field.onChange}

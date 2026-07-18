@@ -1043,8 +1043,8 @@ export const radiologyApi = {
 
 // Triage API
 export const triageApi = {
-  getAll: (priority?: string, status?: string, search?: string, page = 1, limit = 50) =>
-    apiRequest<any[]>(`/api/triage?${new URLSearchParams({ page: page.toString(), limit: limit.toString(), ...(priority && { priority }), ...(status && { status }), ...(search && { search }) })}`),
+  getAll: (priority?: string, status?: string, search?: string, page = 1, limit = 50, patientId?: string) =>
+    apiRequest<any[]>(`/api/triage?${new URLSearchParams({ page: page.toString(), limit: limit.toString(), ...(priority && { priority }), ...(status && { status }), ...(search && { search }), ...(patientId && { patientId }) })}`),
 
   getById: (id: string) =>
     apiRequest<any>(`/api/triage/${id}`),

@@ -93,7 +93,8 @@ function mayObserverJoinTelemedicine(roleName) {
     rn.includes('clinical officer') ||
     rn.includes('clinician') ||
     rn.includes('doctor') ||
-    rn.includes('admin')
+    rn.includes('admin') ||
+    rn.includes('triage')
   );
 }
 

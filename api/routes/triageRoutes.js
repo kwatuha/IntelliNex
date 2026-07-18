@@ -39,7 +39,7 @@ function parseBloodPressureFromBody(body) {
  */
 router.get('/', async (req, res) => {
     try {
-        const { priority, status, search, page = 1, limit = 50 } = req.query;
+        const { priority, status, search, patientId, page = 1, limit = 50 } = req.query;
         const offset = (page - 1) * limit;
 
         let query = `
@@ -56,6 +56,10 @@ router.get('/', async (req, res) => {
         `;
         const params = [];
 
+        if (patientId) {
+            query += ` AND t.patientId = ?`;
+            params.push(patientId);
+        }
         if (priority) {
             query += ` AND t.priority = ?`;
             params.push(priority);
@@ -786,6 +790,44 @@ router.post('/', async (req, res) => {
 
         // Note: Consultation queue entry will be created automatically when consultation fee invoice is paid
         // See billingRoutes.js payment endpoint for consultation queue creation logic
+
+        // Telemedicine: nurse/triage can schedule directly onto the teleconsult queue
+        const destServicePoint = String(servicePoint || 'consultation').toLowerCase();
+        if (destServicePoint === 'telemedicine') {
+            try {
+                const [existingTm] = await connection.execute(
+                    `SELECT queueId FROM queue_entries
+                     WHERE patientId = ? AND servicePoint = 'telemedicine'
+                       AND status IN ('waiting', 'called', 'serving')
+                     LIMIT 1`,
+                    [patientId]
+                );
+                if (existingTm.length === 0) {
+                    const [tmCount] = await connection.execute(
+                        `SELECT COUNT(*) as count FROM queue_entries
+                         WHERE DATE(COALESCE(arrivalTime, createdAt)) = CURDATE()
+                           AND servicePoint = 'telemedicine'`
+                    );
+                    const ticketNum = (tmCount[0]?.count || 0) + 1;
+                    const ticketNumber = `T-${String(ticketNum).padStart(3, '0')}`;
+                    await connection.execute(
+                        `INSERT INTO queue_entries
+                        (patientId, doctorId, ticketNumber, servicePoint, priority, status, notes, createdBy)
+                        VALUES (?, ?, ?, 'telemedicine', ?, 'waiting', ?, ?)`,
+                        [
+                            patientId,
+                            assignedToDoctorId || null,
+                            ticketNumber,
+                            queuePriority,
+                            `Teleconsult after triage ${triageNumber}`,
+                            triagedByUserId,
+                        ]
+                    );
+                }
+            } catch (tmQueueErr) {
+                console.error('[TRIAGE] Failed to enqueue telemedicine:', tmQueueErr.message || tmQueueErr);
+            }
+        }
 
         await connection.commit();
 

@@ -1,24 +1,40 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import dynamic from "next/dynamic"
 import { format } from "date-fns"
-import { History, Loader2, Plus, Printer, Stethoscope, Trash2 } from "lucide-react"
+import {
+  CalendarPlus,
+  ChevronDown,
+  Flag,
+  History,
+  Loader2,
+  Plus,
+  Printer,
+  Stethoscope,
+  Trash2,
+} from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/lib/auth/auth-context"
 import {
+  appointmentsApi,
   laboratoryApi,
   medicalRecordsApi,
   patientApi,
   pharmacyApi,
   proceduresApi,
+  radiologyApi,
+  triageApi,
 } from "@/lib/api"
 import { MedicationCombobox } from "@/components/medication-combobox"
 import { SymptomsAutocomplete } from "@/components/symptoms-autocomplete"
@@ -46,6 +62,84 @@ type MedLine = {
   instructions: string
 }
 
+type ReadyResultFlag = {
+  key: string
+  kind: "lab" | "radiology"
+  label: string
+  dateLabel: string
+  status: string
+}
+
+const APPOINTMENT_TYPES = [
+  "Telemedicine",
+  "Outpatient",
+  "Specialty Clinic",
+  "Laboratory",
+  "Radiology",
+  "Follow-up",
+  "Other",
+] as const
+
+function ackStorageKey(userId: string) {
+  return `tm-order-result-ack:${userId}`
+}
+
+function loadAckKeys(userId: string): Set<string> {
+  if (typeof window === "undefined" || !userId) return new Set()
+  try {
+    const raw = localStorage.getItem(ackStorageKey(userId))
+    const parsed = raw ? JSON.parse(raw) : []
+    return new Set(Array.isArray(parsed) ? parsed.map(String) : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function persistAckKeys(userId: string, keys: Set<string>) {
+  if (typeof window === "undefined" || !userId) return
+  localStorage.setItem(ackStorageKey(userId), JSON.stringify([...keys]))
+}
+
+function orderDateKey(value: unknown): string {
+  if (!value) return "unknown"
+  try {
+    return format(new Date(String(value)), "yyyy-MM-dd")
+  } catch {
+    return "unknown"
+  }
+}
+
+function isResultsReadyStatus(status: unknown): boolean {
+  const s = String(status || "").toLowerCase()
+  return s === "completed" || s === "verified" || s === "released" || s === "reported"
+}
+
+function formatVitalWhen(v: any): string {
+  const d = v?.recordedAt || v?.recordedDate
+  if (!d) return "—"
+  try {
+    return format(new Date(d), "yyyy-MM-dd HH:mm")
+  } catch {
+    return "—"
+  }
+}
+
+function formatVitalBp(v: any): string {
+  if (v?.bloodPressure) return String(v.bloodPressure)
+  if (v?.systolicBP != null || v?.diastolicBP != null) {
+    return `${v.systolicBP ?? "—"}/${v.diastolicBP ?? "—"}`
+  }
+  return "—"
+}
+
+const FACILITY_INTERVENTION_TAG = "[Facility intervention]"
+
+function unwrapList(data: unknown): any[] {
+  if (Array.isArray(data)) return data
+  if (data && typeof data === "object" && Array.isArray((data as any).data)) return (data as any).data
+  return []
+}
+
 export type TelemedicineEncounterPanelProps = {
   patientId: string | null
   patientDisplayName?: string | null
@@ -59,6 +153,7 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
 
   const [tab, setTab] = useState("encounter")
   const [saving, setSaving] = useState(false)
+  const [booking, setBooking] = useState(false)
   const [fullEncounterOpen, setFullEncounterOpen] = useState(false)
 
   const [chiefComplaint, setChiefComplaint] = useState("")
@@ -68,6 +163,13 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
   const [notes, setNotes] = useState("")
   const [medLines, setMedLines] = useState<MedLine[]>([])
 
+  const [apptDate, setApptDate] = useState("")
+  const [apptTime, setApptTime] = useState("")
+  const [apptType, setApptType] = useState<string>("Telemedicine")
+  const [apptReason, setApptReason] = useState("")
+  const [interventionDraft, setInterventionDraft] = useState("")
+  const [savingIntervention, setSavingIntervention] = useState(false)
+
   const [histLoading, setHistLoading] = useState(false)
   const [patientRow, setPatientRow] = useState<any>(null)
   const [allergies, setAllergies] = useState<any[]>([])
@@ -75,28 +177,47 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
   const [records, setRecords] = useState<any[]>([])
   const [rx, setRx] = useState<any[]>([])
   const [labs, setLabs] = useState<any[]>([])
+  const [radiology, setRadiology] = useState<any[]>([])
+  const [completedLabs, setCompletedLabs] = useState<any[]>([])
+  const [completedRadiology, setCompletedRadiology] = useState<any[]>([])
   const [procedures, setProcedures] = useState<any[]>([])
+  const [triageRows, setTriageRows] = useState<any[]>([])
+  const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({})
+  const [ackedKeys, setAckedKeys] = useState<Set<string>>(() => loadAckKeys(doctorId))
+
+  useEffect(() => {
+    setAckedKeys(loadAckKeys(doctorId))
+  }, [doctorId])
 
   const loadHistory = useCallback(async () => {
     if (!patientId) return
     setHistLoading(true)
     try {
-      const [p, al, v, rec, presc, lab, proc] = await Promise.all([
+      const [p, al, v, rec, presc, lab, labDone, rad, radDone, proc, triage] = await Promise.all([
         patientApi.getById(patientId).catch(() => null),
         patientApi.getAllergies(patientId).catch(() => []),
-        patientApi.getVitals(patientId, true).catch(() => []),
-        medicalRecordsApi.getAll(undefined, patientId, undefined, undefined, undefined, 1, 12).catch(() => []),
+        /** Recent vitals (not today-only — telemed patients often triaged earlier). */
+        patientApi.getVitals(patientId).catch(() => []),
+        medicalRecordsApi.getAll(undefined, patientId, undefined, undefined, undefined, 1, 40).catch(() => []),
         pharmacyApi.getPrescriptions(patientId, undefined, 1, 20).catch(() => []),
-        laboratoryApi.getOrders(patientId, undefined, 1, 15).catch(() => []),
+        laboratoryApi.getOrders(patientId, undefined, 1, 40).catch(() => []),
+        laboratoryApi.getOrders(patientId, "completed", 1, 30).catch(() => []),
+        radiologyApi.getOrders(patientId, undefined, 1, 40).catch(() => []),
+        radiologyApi.getOrders(patientId, "completed", 1, 30).catch(() => []),
         proceduresApi.getPatientProcedures(patientId).catch(() => []),
+        triageApi.getAll(undefined, undefined, undefined, 1, 30, patientId).catch(() => []),
       ])
       setPatientRow(p)
-      setAllergies(Array.isArray(al) ? al : [])
-      setVitals(Array.isArray(v) ? v.slice(0, 15) : [])
-      setRecords(Array.isArray(rec) ? rec : [])
-      setRx(Array.isArray(presc) ? presc : [])
-      setLabs(Array.isArray(lab) ? lab : [])
-      setProcedures(Array.isArray(proc) ? proc.slice(0, 20) : [])
+      setAllergies(unwrapList(al))
+      setVitals(unwrapList(v).slice(0, 15))
+      setRecords(unwrapList(rec))
+      setRx(unwrapList(presc))
+      setLabs(unwrapList(lab))
+      setCompletedLabs(unwrapList(labDone))
+      setRadiology(unwrapList(rad))
+      setCompletedRadiology(unwrapList(radDone))
+      setProcedures(unwrapList(proc).slice(0, 20))
+      setTriageRows(unwrapList(triage))
     } catch (e: any) {
       toast({ title: "History load failed", description: e?.message || "Could not load patient data", variant: "destructive" })
     } finally {
@@ -105,8 +226,158 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
   }, [patientId, toast])
 
   useEffect(() => {
-    if (tab === "history" && patientId) void loadHistory()
-  }, [tab, patientId, loadHistory])
+    if (patientId) void loadHistory()
+  }, [patientId, loadHistory])
+
+  const readyFlags = useMemo((): ReadyResultFlag[] => {
+    const flags: ReadyResultFlag[] = []
+    const seen = new Set<string>()
+    const pushLab = (o: any) => {
+      if (!o?.orderId || !isResultsReadyStatus(o.status)) return
+      const key = `lab:${o.orderId}`
+      if (seen.has(key) || ackedKeys.has(key)) return
+      seen.add(key)
+      const tests = String(o.testNames || "").trim()
+      flags.push({
+        key,
+        kind: "lab",
+        label: tests
+          ? `Lab: ${tests.slice(0, 80)}${tests.length > 80 ? "…" : ""}`
+          : o.orderNumber
+            ? `Lab #${o.orderNumber}`
+            : `Lab order #${o.orderId}`,
+        dateLabel: o.orderDate ? format(new Date(o.orderDate), "yyyy-MM-dd") : "—",
+        status: String(o.status || "completed"),
+      })
+    }
+    const pushRad = (o: any) => {
+      if (!o?.orderId || !isResultsReadyStatus(o.status)) return
+      const key = `radiology:${o.orderId}`
+      if (seen.has(key) || ackedKeys.has(key)) return
+      seen.add(key)
+      const exam = String(o.examName || o.bodyPart || "").trim()
+      flags.push({
+        key,
+        kind: "radiology",
+        label: exam
+          ? `Imaging: ${exam}`
+          : o.orderNumber
+            ? `Imaging #${o.orderNumber}`
+            : `Imaging order #${o.orderId}`,
+        dateLabel: o.orderDate ? format(new Date(o.orderDate), "yyyy-MM-dd") : "—",
+        status: String(o.status || "completed"),
+      })
+    }
+    completedLabs.forEach(pushLab)
+    labs.forEach(pushLab)
+    completedRadiology.forEach(pushRad)
+    radiology.forEach(pushRad)
+    return flags
+  }, [labs, radiology, completedLabs, completedRadiology, ackedKeys])
+
+  const facilityInterventions = useMemo(() => {
+    const items: { id: string; when: string; text: string; by?: string }[] = []
+    for (const t of triageRows) {
+      const parts = [t.chiefComplaint, t.notes].map((x: unknown) => String(x || "").trim()).filter(Boolean)
+      if (parts.length === 0) continue
+      const when = t.triageDate || t.createdAt
+      items.push({
+        id: `triage-${t.triageId}`,
+        when: when ? format(new Date(when), "yyyy-MM-dd HH:mm") : "—",
+        text: parts.join(" — "),
+        by: [t.triagedByFirstName, t.triagedByLastName].filter(Boolean).join(" ") || "Triage",
+      })
+    }
+    for (const v of vitals) {
+      const note = String(v.notes || "").trim()
+      if (!note) continue
+      items.push({
+        id: `vital-note-${v.vitalSignId || formatVitalWhen(v)}`,
+        when: formatVitalWhen(v),
+        text: note,
+        by: [v.recordedByFirstName, v.recordedByLastName].filter(Boolean).join(" ") || "Facility",
+      })
+    }
+    for (const r of records) {
+      const note = String(r.notes || "")
+      if (!note.includes(FACILITY_INTERVENTION_TAG) && String(r.department || "") !== "Facility") continue
+      const text = note.replace(FACILITY_INTERVENTION_TAG, "").trim() || r.treatment || r.chiefComplaint
+      if (!String(text || "").trim()) continue
+      const when = r.visitDate || r.createdAt
+      items.push({
+        id: `rec-${r.recordId}`,
+        when: when ? format(new Date(when), "yyyy-MM-dd HH:mm") : "—",
+        text: String(text).trim(),
+        by: [r.doctorFirstName, r.doctorLastName].filter(Boolean).join(" ") || "Facility",
+      })
+    }
+    return items
+      .sort((a, b) => String(b.when).localeCompare(String(a.when)))
+      .slice(0, 12)
+  }, [triageRows, vitals, records])
+
+  const encountersByDate = useMemo(() => {
+    const map = new Map<string, any[]>()
+    for (const r of records) {
+      const key = orderDateKey(r.visitDate || r.createdAt)
+      const list = map.get(key) || []
+      list.push(r)
+      map.set(key, list)
+    }
+    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]))
+  }, [records])
+
+  const acknowledgeFlag = (key: string) => {
+    setAckedKeys((prev) => {
+      const next = new Set(prev)
+      next.add(key)
+      persistAckKeys(doctorId, next)
+      return next
+    })
+  }
+
+  const handleSaveIntervention = async () => {
+    const text = interventionDraft.trim()
+    if (!text) {
+      toast({ title: "Nothing to save", description: "Enter the facility intervention first.", variant: "destructive" })
+      return
+    }
+    if (!patientId || !doctorId) {
+      toast({ title: "Cannot save", description: "Patient and signed-in clinician are required.", variant: "destructive" })
+      return
+    }
+    setSavingIntervention(true)
+    try {
+      const today = format(new Date(), "yyyy-MM-dd")
+      await medicalRecordsApi.create({
+        patientId: parseInt(patientId, 10),
+        doctorId: parseInt(doctorId, 10),
+        visitDate: today,
+        visitType: "Outpatient",
+        department: "Facility",
+        chiefComplaint: null,
+        symptoms: null,
+        historyOfPresentIllness: null,
+        physicalExamination: null,
+        diagnosis: null,
+        treatment: text,
+        outcome: null,
+        prescription: null,
+        notes: `${FACILITY_INTERVENTION_TAG}\n${text}\n[Telemedicine] Session #${sessionId}`,
+      })
+      setInterventionDraft("")
+      toast({ title: "Intervention saved", description: "Visible to consultants on this panel." })
+      void loadHistory()
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e?.message || "Could not save intervention", variant: "destructive" })
+    } finally {
+      setSavingIntervention(false)
+    }
+  }
+
+  const toggleDate = (dateKey: string) => {
+    setExpandedDates((prev) => ({ ...prev, [dateKey]: !prev[dateKey] }))
+  }
 
   const addMedLine = () => {
     setMedLines((prev) => [...prev, { medicationId: "", dosage: "", frequency: "", duration: "", instructions: "" }])
@@ -114,6 +385,39 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
   const removeMedLine = (i: number) => setMedLines((prev) => prev.filter((_, idx) => idx !== i))
   const updateMedLine = (i: number, patch: Partial<MedLine>) =>
     setMedLines((prev) => prev.map((row, idx) => (idx === i ? { ...row, ...patch } : row)))
+
+  const handleBookAppointment = async () => {
+    if (!patientId) {
+      toast({ title: "No patient", description: "Wait for the session to load.", variant: "destructive" })
+      return
+    }
+    if (!apptDate || !apptTime) {
+      toast({ title: "Date and time required", description: "Choose appointment date and time.", variant: "destructive" })
+      return
+    }
+    setBooking(true)
+    try {
+      await appointmentsApi.create({
+        patientId: parseInt(patientId, 10),
+        doctorId: doctorId ? parseInt(doctorId, 10) : null,
+        appointmentDate: apptDate,
+        appointmentTime: apptTime,
+        department: apptType || "Telemedicine",
+        reason: apptReason.trim() || `Follow-up from telemedicine session #${sessionId}`,
+        status: "scheduled",
+        notes: `Booked during telemedicine session #${sessionId}`,
+      })
+      toast({
+        title: "Appointment booked",
+        description: `${apptType} on ${apptDate} at ${apptTime}`,
+      })
+      setApptReason("")
+    } catch (e: any) {
+      toast({ title: "Booking failed", description: e?.message || "Could not create appointment", variant: "destructive" })
+    } finally {
+      setBooking(false)
+    }
+  }
 
   const handleSaveEncounter = async () => {
     if (!patientId) {
@@ -161,7 +465,6 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
       })
 
       if (filledMeds.length > 0) {
-        /** Pharmacy `prescriptions` + items — same pipeline as main encounter form. */
         const items = filledMeds.map((m) => ({
           medicationId: parseInt(m.medicationId, 10),
           dosage: m.dosage,
@@ -228,6 +531,12 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
           <CardTitle className="flex items-center gap-2 text-sm">
             <Stethoscope className="h-4 w-4 shrink-0" />
             <span className="truncate">Encounter</span>
+            {readyFlags.length > 0 ? (
+              <Badge variant="destructive" className="ml-auto gap-1 text-[10px] font-normal">
+                <Flag className="h-3 w-3" />
+                {readyFlags.length} result{readyFlags.length === 1 ? "" : "s"}
+              </Badge>
+            ) : null}
           </CardTitle>
           <p className="truncate text-xs text-muted-foreground">
             <span className="font-medium text-foreground">{headerName}</span>
@@ -235,6 +544,106 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
           </p>
         </CardHeader>
         <CardContent className="flex min-h-0 flex-1 flex-col gap-2 p-3 pt-0">
+          <div
+            className={cn(
+              "shrink-0 space-y-1.5 rounded-md border p-2",
+              readyFlags.length > 0
+                ? "border-amber-500/40 bg-amber-50/80 dark:bg-amber-950/30"
+                : "border-border/60 bg-muted/20"
+            )}
+          >
+            <p
+              className={cn(
+                "flex items-center gap-1.5 text-[11px] font-semibold",
+                readyFlags.length > 0 ? "text-amber-900 dark:text-amber-200" : "text-muted-foreground"
+              )}
+            >
+              <Flag className="h-3.5 w-3.5" />
+              {readyFlags.length > 0
+                ? `Results ready (${readyFlags.length}) — tick to clear`
+                : "Results ready — none awaiting review"}
+            </p>
+            {readyFlags.length > 0 ? (
+              <ul className="space-y-1.5">
+                {readyFlags.map((f) => (
+                  <li key={f.key} className="flex items-start gap-2 text-[11px]">
+                    <Checkbox
+                      id={`ack-${f.key}`}
+                      className="mt-0.5"
+                      checked={false}
+                      onCheckedChange={(checked) => {
+                        if (checked) acknowledgeFlag(f.key)
+                      }}
+                    />
+                    <label htmlFor={`ack-${f.key}`} className="cursor-pointer leading-snug text-foreground">
+                      <span className="font-medium">{f.label}</span>
+                      <span className="text-muted-foreground">
+                        {" "}
+                        · {f.dateLabel} · {f.status}
+                      </span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-[10px] text-muted-foreground">
+                Completed lab or imaging orders for this patient appear here until you acknowledge them.
+              </p>
+            )}
+          </div>
+
+          <div className="shrink-0 max-h-[200px] space-y-2 overflow-y-auto rounded-md border border-border/60 bg-muted/30 p-2 text-xs">
+            <section>
+              <h4 className="mb-1 font-semibold">Triage vitals</h4>
+              {vitals.length > 0 ? (
+                <ul className="space-y-1 text-muted-foreground">
+                  {vitals.slice(0, 5).map((v: any, idx: number) => (
+                    <li key={v.vitalSignId ?? idx}>
+                      {formatVitalWhen(v)}: BP {formatVitalBp(v)}, HR {v.heartRate ?? "—"}, Temp {v.temperature ?? "—"}
+                      {v.oxygenSaturation != null ? `, SpO₂ ${v.oxygenSaturation}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-[10px] text-muted-foreground">No vitals on record for this patient.</p>
+              )}
+            </section>
+            <section className="border-t border-border/40 pt-2">
+              <h4 className="mb-1 font-semibold">Facility interventions</h4>
+              {facilityInterventions.length > 0 ? (
+                <ul className="mb-2 space-y-1.5 text-muted-foreground">
+                  {facilityInterventions.map((item) => (
+                    <li key={item.id} className="leading-snug">
+                      <span className="font-medium text-foreground">{item.when}</span>
+                      {item.by ? <span> · {item.by}</span> : null}
+                      <div className="whitespace-pre-wrap text-foreground/90">{item.text}</div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mb-2 text-[10px] text-muted-foreground">
+                  No interventions yet. Triage notes and entries below appear here.
+                </p>
+              )}
+              <Textarea
+                className="min-h-[52px] text-xs"
+                placeholder="What facility providers did (oxygen, IV, wound care…)"
+                value={interventionDraft}
+                onChange={(e) => setInterventionDraft(e.target.value)}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-1.5 h-7 w-full text-[10px]"
+                disabled={savingIntervention || !interventionDraft.trim()}
+                onClick={() => void handleSaveIntervention()}
+              >
+                {savingIntervention ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save facility intervention"}
+              </Button>
+            </section>
+          </div>
+
           <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col gap-2">
             <TabsList className="grid h-8 w-full grid-cols-2">
               <TabsTrigger value="encounter" className="text-xs">
@@ -305,6 +714,52 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
                     ))}
                   </div>
 
+                  <div className="space-y-2 border-t pt-2">
+                    <div className="flex items-center gap-1.5">
+                      <CalendarPlus className="h-3.5 w-3.5 text-muted-foreground" />
+                      <Label className="text-xs font-semibold">Book next appointment</Label>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">Schedule another telemedicine or facility encounter for this patient.</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <Label className="text-[10px]">Date</Label>
+                        <Input type="date" className="h-8 text-xs" value={apptDate} onChange={(e) => setApptDate(e.target.value)} />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-[10px]">Time</Label>
+                        <Input type="time" className="h-8 text-xs" value={apptTime} onChange={(e) => setApptTime(e.target.value)} />
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[10px]">Encounter type</Label>
+                      <Select value={apptType} onValueChange={setApptType}>
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue placeholder="Type" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {APPOINTMENT_TYPES.map((t) => (
+                            <SelectItem key={t} value={t} className="text-xs">
+                              {t}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-[10px]">Reason (optional)</Label>
+                      <Textarea
+                        className="text-xs"
+                        rows={2}
+                        placeholder="e.g. Review labs, follow-up cough"
+                        value={apptReason}
+                        onChange={(e) => setApptReason(e.target.value)}
+                      />
+                    </div>
+                    <Button type="button" variant="secondary" size="sm" className="h-8 w-full text-xs" disabled={booking} onClick={() => void handleBookAppointment()}>
+                      {booking ? <Loader2 className="h-4 w-4 animate-spin" /> : "Book appointment"}
+                    </Button>
+                  </div>
+
                   <Button type="button" variant="secondary" size="sm" className="h-8 w-full text-xs" onClick={() => setFullEncounterOpen(true)}>
                     Open full encounter form (labs, imaging, procedures…)
                   </Button>
@@ -333,31 +788,83 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
                         </ul>
                       </section>
                     )}
-                    {vitals.length > 0 && (
-                      <section>
-                        <h4 className="mb-1 font-semibold">Recent vitals</h4>
-                        <ul className="space-y-1 text-muted-foreground">
-                          {vitals.slice(0, 8).map((v: any, idx: number) => (
-                            <li key={idx}>
-                              {v.recordedAt ? format(new Date(v.recordedAt), "yyyy-MM-dd HH:mm") : "—"}: BP {v.bloodPressure ?? "—"}, HR {v.heartRate ?? "—"}, Temp{" "}
-                              {v.temperature ?? "—"}
-                            </li>
-                          ))}
+
+                    <section>
+                      <h4 className="mb-2 font-semibold">Historical encounters</h4>
+                      {encountersByDate.length === 0 ? (
+                        <p className="text-muted-foreground">No prior encounters on record.</p>
+                      ) : (
+                        <ul className="space-y-1.5">
+                          {encountersByDate.map(([dateKey, dayRecords]) => {
+                            const open = expandedDates[dateKey] ?? false
+                            const first = dayRecords[0]
+                            const summary =
+                              first?.diagnosis ||
+                              first?.chiefComplaint ||
+                              first?.visitType ||
+                              `${dayRecords.length} visit${dayRecords.length === 1 ? "" : "s"}`
+                            return (
+                              <li key={dateKey}>
+                                <Collapsible open={open} onOpenChange={() => toggleDate(dateKey)}>
+                                  <CollapsibleTrigger asChild>
+                                    <button
+                                      type="button"
+                                      className="flex w-full items-center gap-2 rounded-md border border-border/70 bg-background/80 px-2 py-1.5 text-left hover:bg-muted/50"
+                                    >
+                                      <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 transition-transform", !open && "-rotate-90")} />
+                                      <span className="font-medium text-foreground">{dateKey === "unknown" ? "Unknown date" : dateKey}</span>
+                                      <span className="truncate text-muted-foreground">· {summary}</span>
+                                      <Badge variant="outline" className="ml-auto h-5 shrink-0 text-[10px]">
+                                        {dayRecords.length}
+                                      </Badge>
+                                    </button>
+                                  </CollapsibleTrigger>
+                                  <CollapsibleContent className="space-y-2 px-1 pt-2">
+                                    {dayRecords.map((r: any) => (
+                                      <div key={r.recordId} className="rounded-md border border-border/50 bg-muted/20 p-2 text-muted-foreground">
+                                        <div className="font-medium text-foreground">
+                                          {r.visitType || "Visit"}
+                                          {r.department ? ` · ${r.department}` : ""}
+                                        </div>
+                                        {r.chiefComplaint ? <div>CC: {r.chiefComplaint}</div> : null}
+                                        {r.symptoms ? <div>Sx: {r.symptoms}</div> : null}
+                                        {r.diagnosis ? <div>Dx: {r.diagnosis}</div> : null}
+                                        {r.treatment ? <div>Plan: {r.treatment}</div> : null}
+                                        {r.notes ? <div className="whitespace-pre-wrap">Notes: {r.notes}</div> : null}
+                                        {(r.doctorFirstName || r.doctorLastName) && (
+                                          <div className="mt-1 text-[10px]">
+                                            Dr {r.doctorFirstName || ""} {r.doctorLastName || ""}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                    {labs.filter((o: any) => orderDateKey(o.orderDate) === dateKey).length > 0 ? (
+                                      <div className="pl-1 text-muted-foreground">
+                                        <span className="font-medium text-foreground">Labs that day: </span>
+                                        {labs
+                                          .filter((o: any) => orderDateKey(o.orderDate) === dateKey)
+                                          .map((o: any) => `${o.orderNumber || o.orderId} (${o.status || "—"})`)
+                                          .join(", ")}
+                                      </div>
+                                    ) : null}
+                                    {rx.filter((p: any) => orderDateKey(p.prescriptionDate) === dateKey).length > 0 ? (
+                                      <div className="pl-1 text-muted-foreground">
+                                        <span className="font-medium text-foreground">Rx that day: </span>
+                                        {rx
+                                          .filter((p: any) => orderDateKey(p.prescriptionDate) === dateKey)
+                                          .map((p: any) => `#${p.prescriptionNumber || p.prescriptionId} (${p.status || "—"})`)
+                                          .join(", ")}
+                                      </div>
+                                    ) : null}
+                                  </CollapsibleContent>
+                                </Collapsible>
+                              </li>
+                            )
+                          })}
                         </ul>
-                      </section>
-                    )}
-                    {labs.length > 0 && (
-                      <section>
-                        <h4 className="mb-1 font-semibold">Lab orders</h4>
-                        <ul className="space-y-1 text-muted-foreground">
-                          {labs.slice(0, 10).map((o: any) => (
-                            <li key={o.orderId}>
-                              {o.orderDate ? format(new Date(o.orderDate), "yyyy-MM-dd") : "—"} — {o.status || "pending"}
-                            </li>
-                          ))}
-                        </ul>
-                      </section>
-                    )}
+                      )}
+                    </section>
+
                     {rx.length > 0 && (
                       <section>
                         <h4 className="mb-2 font-semibold">Prescriptions</h4>
@@ -442,11 +949,6 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
                                               ) : null}
                                               {it.instructions ? <span> · {it.instructions}</span> : null}
                                             </div>
-                                            {it.status && String(it.status).toLowerCase() !== String(p.status || "").toLowerCase() ? (
-                                              <Badge variant="outline" className="mt-1 h-5 text-[10px]">
-                                                Line: {it.status}
-                                              </Badge>
-                                            ) : null}
                                           </li>
                                         )
                                       })}
@@ -460,6 +962,7 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
                         </ul>
                       </section>
                     )}
+
                     {procedures.length > 0 && (
                       <section>
                         <h4 className="mb-1 font-semibold">Procedures</h4>
@@ -472,28 +975,12 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
                         </ul>
                       </section>
                     )}
-                    {records.length > 0 && (
-                      <section>
-                        <h4 className="mb-1 font-semibold">Prior visits</h4>
-                        <ul className="space-y-2 text-muted-foreground">
-                          {records.map((r: any) => (
-                            <li key={r.recordId} className="border-b border-border/50 pb-2 last:border-0">
-                              <div className="font-medium text-foreground">
-                                {r.visitDate ? format(new Date(r.visitDate), "yyyy-MM-dd") : "—"} · {r.visitType || "Visit"}
-                              </div>
-                              {r.diagnosis && <div>Dx: {r.diagnosis}</div>}
-                              {r.chiefComplaint && <div>CC: {r.chiefComplaint}</div>}
-                            </li>
-                          ))}
-                        </ul>
-                      </section>
-                    )}
+
                     {allergies.length === 0 &&
-                      vitals.length === 0 &&
+                      encountersByDate.length === 0 &&
                       labs.length === 0 &&
                       rx.length === 0 &&
-                      procedures.length === 0 &&
-                      records.length === 0 && <p className="text-muted-foreground">No history loaded yet.</p>}
+                      procedures.length === 0 && <p className="text-muted-foreground">No history loaded yet.</p>}
                   </div>
                 )}
               </div>

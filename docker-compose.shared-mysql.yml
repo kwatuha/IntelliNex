@@ -77,6 +77,8 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
         NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-}
+        NEXT_PUBLIC_PRODUCT_NAME: ${NEXT_PUBLIC_PRODUCT_NAME:-IntelliNex}
+        NEXT_PUBLIC_APP_BRAND: ${NEXT_PUBLIC_APP_BRAND:-IntelliNex}
     container_name: kiplombe_frontend
     restart: unless-stopped
     ports:

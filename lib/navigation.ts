@@ -37,6 +37,8 @@ import {
   Video,
   Truck,
   Smartphone,
+  Brain,
+  Droplets,
 } from "lucide-react"
 
 export interface NavigationItem {
@@ -152,6 +154,13 @@ export const navigationCategories: NavigationCategory[] = [
         group: "Outpatient & diagnostics",
       },
       {
+        title: "Specialist Clinics",
+        icon: Brain,
+        href: "/specialist-clinics",
+        description: "Neurosurgery, cardiology, ENT, ophthalmology, dental, and other specialist services",
+        group: "Outpatient & diagnostics",
+      },
+      {
         title: "Pharmacy",
         icon: Pill,
         href: "/pharmacy",
@@ -244,6 +253,13 @@ export const navigationCategories: NavigationCategory[] = [
         group: "Wards & beds",
       },
       {
+        title: "Renal Unit & Dialysis",
+        icon: Droplets,
+        href: "/renal",
+        description: "Dialysis scheduling, machine status, and renal patient registry",
+        group: "Wards & beds",
+      },
+      {
         title: "Ambulance Management",
         icon: Ambulance,
         href: "/ambulance",
@@ -285,6 +301,13 @@ export const navigationCategories: NavigationCategory[] = [
     icon: DollarSign,
     description: "Financial operations and billing",
     items: [
+      {
+        title: "Finance Overview",
+        icon: BarChart3,
+        href: "/finance",
+        description: "Revenue, expenses, outstanding invoices, and quick access to finance modules",
+        group: "Ledger & reporting",
+      },
       {
         title: "General Ledger",
         icon: Clipboard,
@@ -360,6 +383,12 @@ export const navigationCategories: NavigationCategory[] = [
     description: "Procurement and inventory management",
     items: [
       {
+        title: "Procurement Overview",
+        icon: ShoppingCart,
+        href: "/procurement",
+        description: "Purchase orders, vendor activity, and low-stock alerts",
+      },
+      {
         title: "Vendor Management",
         icon: Users,
         href: "/procurement/vendors",
@@ -402,6 +431,12 @@ export const navigationCategories: NavigationCategory[] = [
     icon: UserCog,
     description: "HR and administrative functions",
     items: [
+      {
+        title: "HR Overview",
+        icon: Users,
+        href: "/hr",
+        description: "Staffing snapshot, leave, vacancies, and recent HR activity",
+      },
       {
         title: "Employee Management",
         icon: UserCog,

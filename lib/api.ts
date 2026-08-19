@@ -1202,6 +1202,26 @@ export const appointmentsApi = {
     apiRequest<any>(`/api/appointments/${id}`, { method: 'DELETE' }),
 };
 
+/** Unauthenticated create + staff inbox for /hmis/book */
+export const publicBookingsApi = {
+  create: (data: Record<string, unknown>) =>
+    apiRequest<any>('/api/public/appointments', { method: 'POST', body: data, timeoutMs: 15000 }),
+
+  lookup: (code: string) =>
+    apiRequest<any>(`/api/public/appointments/lookup/${encodeURIComponent(code)}`, { timeoutMs: 10000 }),
+
+  list: (status?: string) =>
+    apiRequest<any[]>(
+      `/api/public/appointments${status ? `?${new URLSearchParams({ status })}` : ''}`
+    ),
+
+  accept: (id: string | number) =>
+    apiRequest<any>(`/api/public/appointments/${id}/accept`, { method: 'POST' }),
+
+  decline: (id: string | number) =>
+    apiRequest<any>(`/api/public/appointments/${id}/decline`, { method: 'POST' }),
+};
+
 // Telemedicine API (Zoom link mode + optional Meeting SDK embed via server-signed JWT)
 export const telemedicineApi = {
   /** Per-user defaults (PMI link, passcode); copied into new sessions when no URL is sent */

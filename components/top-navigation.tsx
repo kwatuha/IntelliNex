@@ -8,6 +8,10 @@ import { cn } from "@/lib/utils"
 import { useAuth } from "@/lib/auth/auth-context"
 import { useRoleMenuAccess } from "@/lib/hooks/use-role-menu-access"
 import { filterNavigationCategories, filterSidebarItems } from "@/lib/role-menu-filter"
+import {
+  applyTelemedicineScopeToCategories,
+  applyTelemedicineScopeToItems,
+} from "@/lib/telemedicine-scope"
 import { useSidebar } from "@/components/ui/sidebar"
 import * as LucideIcons from "lucide-react"
 import { ArrowRight } from "lucide-react"
@@ -37,10 +41,11 @@ export function TopNavigation({ onCategoryChange, activeCategory }: TopNavigatio
 
     const category = navigationCategories.find((cat) => cat.id === categoryId)
     if (category && category.items.length > 0) {
-      const allowedItems =
+      const allowedItems = applyTelemedicineScopeToItems(
         menuLoading || !menuAccess
           ? category.items
           : filterSidebarItems(category.items, category.id, menuAccess)
+      )
       const firstAllowedItem = allowedItems[0]
       if (firstAllowedItem) {
         router.push(firstAllowedItem.href)
@@ -56,10 +61,11 @@ export function TopNavigation({ onCategoryChange, activeCategory }: TopNavigatio
     return pathname === path || (path !== "/" && pathname.startsWith(path + "/"))
   }
 
-  const allowedCategories =
+  const allowedCategories = applyTelemedicineScopeToCategories(
     menuLoading || !menuAccess
       ? navigationCategories
       : filterNavigationCategories(navigationCategories, menuAccess)
+  )
 
   return (
     <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">

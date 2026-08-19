@@ -14,3 +14,11 @@ DirectoryIndex index.html
   RewriteCond %{REQUEST_FILENAME}.html -f
   RewriteRule ^ %{REQUEST_URI}.html [L]
 </IfModule>
+
+# Allow Tophill Hospital website to embed /hmis/book (iframe). Do not apply to the whole HMIS.
+<IfModule mod_headers.c>
+  <If "%{REQUEST_URI} =~ m#/book#">
+    Header always unset X-Frame-Options
+    Header always set Content-Security-Policy "frame-ancestors 'self' https://www.tophillhospital.com https://tophillhospital.com"
+  </If>
+</IfModule>

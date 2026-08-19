@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply telemedicine schema inside the kiplombe_mysql Docker container (same pattern as add-symptoms-columns-docker.sh).
+# Apply telemedicine schema + experience-pack role migrations inside the MySQL Docker container.
 #
 # Usage (from repo root or api/):
 #   bash api/scripts/run-telemedicine-migration-docker.sh
@@ -20,23 +20,38 @@ DB_PASSWORD="${MYSQL_PASSWORD:-kiplombe_password}"
 MYSQL_ROOT_PASSWORD="${MYSQL_ROOT_PASSWORD:-root_password}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SQL40="$SCRIPT_DIR/../database/migrations/40_telemedicine_sessions_schema.sql"
-SQL41="$SCRIPT_DIR/../database/migrations/41_telemedicine_zoom_manual.sql"
-SQL42="$SCRIPT_DIR/../database/migrations/42_user_telemedicine_defaults.sql"
-SQL43="$SCRIPT_DIR/../database/migrations/43_telemedicine_standalone_origin.sql"
+MIGRATIONS_DIR="$SCRIPT_DIR/../database/migrations"
 
-for f in "$SQL40" "$SQL41" "$SQL42" "$SQL43"; do
-  if [[ ! -f "$f" ]]; then
-    echo "❌ Missing SQL file: $f"
+MIGRATIONS=(
+  40_telemedicine_sessions_schema.sql
+  41_telemedicine_zoom_manual.sql
+  42_user_telemedicine_defaults.sql
+  43_telemedicine_standalone_origin.sql
+  43_telemedicine_queue_origin.sql
+  49_telemedicine_video_providers.sql
+  67_telemedicine_metrics.sql
+  68_nurse_triage_telemedicine_menu.sql
+  69_telemedicine_clinician_role.sql
+)
+
+for f in "${MIGRATIONS[@]}"; do
+  if [[ ! -f "$MIGRATIONS_DIR/$f" ]]; then
+    echo "❌ Missing SQL file: $MIGRATIONS_DIR/$f"
     exit 1
   fi
 done
 
 echo "Checking Docker container '$CONTAINER_NAME'..."
 if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}\$"; then
-  echo "❌ Container '$CONTAINER_NAME' is not running."
-  echo "   Start MySQL with: docker compose up -d mysql_db   (or docker-compose up -d mysql_db)"
-  exit 1
+  # Fall back to common local compose name
+  if docker ps --format '{{.Names}}' | grep -q "^intellinex_mysql\$"; then
+    CONTAINER_NAME="intellinex_mysql"
+    echo "   (using container $CONTAINER_NAME)"
+  else
+    echo "❌ Container '$CONTAINER_NAME' is not running."
+    echo "   Start MySQL with: docker compose up -d mysql_db   (or docker-compose up -d mysql_db)"
+    exit 1
+  fi
 fi
 
 mysql_apply() {
@@ -50,10 +65,9 @@ mysql_apply() {
   fi
 }
 
-mysql_apply "$SQL40" "40_telemedicine_sessions_schema.sql"
-mysql_apply "$SQL41" "41_telemedicine_zoom_manual.sql"
-mysql_apply "$SQL42" "42_user_telemedicine_defaults.sql"
-mysql_apply "$SQL43" "43_telemedicine_standalone_origin.sql"
+for f in "${MIGRATIONS[@]}"; do
+  mysql_apply "$MIGRATIONS_DIR/$f" "$f"
+done
 
 echo ""
-echo "✅ Telemedicine migration finished (database: $DB_NAME)."
+echo "✅ Telemedicine migration finished (database: $DB_NAME) — schema + telemedicine_clinician role."

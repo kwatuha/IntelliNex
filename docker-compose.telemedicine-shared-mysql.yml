@@ -1,0 +1,128 @@
+# Telemedicine showcase stack — same pattern as docker-compose.shared-mysql.yml
+# but with unique container names so it can run beside the main HMIS on one host.
+#
+# Uses the host's existing MySQL (external Docker network). Create a dedicated DB first:
+#   ./deploy/setup-telemedicine-db-remote.sh
+#
+# Deploy from laptop:
+#   LOCAL_ENV_FILE=./deploy/.env.telemedicine \
+#     ./deploy/deploy-telemedicine-shared-mysql.sh
+#
+# Defaults (override in .env):
+#   API_PORT=3011
+#   HMIS_FRONTEND_PORT=3112
+#   HMIS_HTTPS_PORT=8443
+#   COMPOSE_PROJECT_NAME=intellinex-telemed
+
+services:
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.prod
+    container_name: telemed_api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-3011}:3001"
+    volumes:
+      - telemed_api_uploads:/app/uploads
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DB_HOST: ${DB_HOST:-db}
+      DB_USER: ${MYSQL_USER:-${DB_USER:-telemed_user}}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-${DB_PASSWORD:-}}
+      DB_NAME: ${MYSQL_DATABASE:-${DB_NAME:-intellinex_telemed_db}}
+      DB_PORT: ${DB_PORT:-3306}
+      JWT_SECRET: ${JWT_SECRET:-change_this_jwt_secret_in_production}
+      PORT: 3001
+      API_BASE_URL: ${API_BASE_URL:-http://telemed_api:3001}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+      FRONTEND_URL: ${FRONTEND_URL:-}
+    networks:
+      - telemed_app
+      - existing_mysql
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-}
+        NEXT_PUBLIC_PRODUCT_NAME: ${NEXT_PUBLIC_PRODUCT_NAME:-IntelliNex}
+        NEXT_PUBLIC_APP_BRAND: ${NEXT_PUBLIC_APP_BRAND:-IntelliNex Telemed}
+        NEXT_PUBLIC_EXPERIENCE_PACK: ${NEXT_PUBLIC_EXPERIENCE_PACK:-telemedicine}
+    container_name: telemed_frontend
+    restart: unless-stopped
+    ports:
+      - "${HMIS_FRONTEND_PORT:-3112}:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+      NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-}
+      NEXT_PUBLIC_PRODUCT_NAME: ${NEXT_PUBLIC_PRODUCT_NAME:-IntelliNex}
+      NEXT_PUBLIC_APP_BRAND: ${NEXT_PUBLIC_APP_BRAND:-IntelliNex Telemed}
+      NEXT_PUBLIC_EXPERIENCE_PACK: ${NEXT_PUBLIC_EXPERIENCE_PACK:-telemedicine}
+      HOSTNAME: "0.0.0.0"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - telemed_app
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/hmis/"]
+      interval: 30s
+      timeout: 10s
+      retries: 8
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  nginx_https:
+    profiles:
+      - https
+    image: nginx:alpine
+    container_name: telemed_hmis_https
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    ports:
+      - "${HMIS_HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./deploy/ssl-telemed:/etc/nginx/ssl:ro
+      - ./deploy/nginx-fullstack-tls.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - telemed_app
+
+networks:
+  telemed_app:
+    driver: bridge
+  existing_mysql:
+    external: true
+    name: ${EXTERNAL_MYSQL_DOCKER_NETWORK:-projects_default}
+
+volumes:
+  telemed_api_uploads:
+    driver: local

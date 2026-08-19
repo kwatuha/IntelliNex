@@ -10,6 +10,7 @@ import { CriticalNotificationsProvider } from "@/lib/critical-notifications-cont
 import { Toaster } from "@/components/ui/toaster"
 import { TelemedicineFloatingProvider, useTelemedicineFloating } from "@/lib/telemedicine-floating-context"
 import { TelemedicineFloatingPanel } from "@/components/telemedicine-floating-panel"
+import { TelemedicineScopeGuard } from "@/components/telemedicine-scope-guard"
 import { cn } from "@/lib/utils"
 
 interface MainLayoutContentProps {
@@ -52,6 +53,7 @@ export function MainLayoutContent({ children }: MainLayoutContentProps) {
     <TelemedicineFloatingProvider>
       <CriticalNotificationsProvider>
         <SidebarProvider>
+          <TelemedicineScopeGuard />
           <MainLayoutShell>{children}</MainLayoutShell>
           <Toaster />
           <TelemedicineFloatingPanel />

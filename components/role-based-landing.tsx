@@ -17,6 +17,9 @@ export function RoleBasedLanding() {
     if (!isLoading && roleName === "chemist") {
       router.replace("/chemist/referrals")
     }
+    if (!isLoading && (roleName === "telemedicine_clinician" || roleName === "telemedicine clinician")) {
+      router.replace("/telemedicine")
+    }
   }, [isLoading, router, user])
   
   // Use landing config from user object (set during login)

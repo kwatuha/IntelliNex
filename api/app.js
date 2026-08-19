@@ -62,6 +62,7 @@ const mohReportsRoutes = require('./routes/mohReportsRoutes');
 const dataCollectionRoutes = require('./routes/dataCollectionRoutes');
 const mobileAppRoutes = require('./routes/mobileAppRoutes');
 const telemedicineRoutes = require('./routes/telemedicineRoutes');
+const publicAppointmentRoutes = require('./routes/publicAppointmentRoutes');
 
 const authenticate = require('./middleware/authenticate');
 
@@ -71,7 +72,22 @@ const app = express();
 
 // CORS configuration
 // In production, allow requests from the server IP on common ports
+const extraPublicOrigins = () => {
+  const fromEnv = String(process.env.PUBLIC_CORS_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const defaults = [
+    'https://www.tophillhospital.com',
+    'https://tophillhospital.com',
+    'http://www.tophillhospital.com',
+    'http://tophillhospital.com',
+  ]
+  return [...new Set([...defaults, ...fromEnv])]
+}
+
 const getAllowedOrigins = () => {
+  const extras = extraPublicOrigins()
   if (process.env.NODE_ENV === 'production') {
     const origins = []
     const serverIP = process.env.FRONTEND_URL?.replace(/^https?:\/\//, '').split(':')[0] || '41.89.173.8'
@@ -82,10 +98,11 @@ const getAllowedOrigins = () => {
     if (process.env.FRONTEND_URL) {
       origins.push(process.env.FRONTEND_URL)
     }
+    origins.push(...extras)
     return origins
   }
   // In development, allow any localhost port (cannot use '*' with credentials: true)
-  return ['__ALLOW_ANY_LOCALHOST_PORT__']
+  return ['__ALLOW_ANY_LOCALHOST_PORT__', ...extras]
 }
 
 const corsOptions = {
@@ -135,6 +152,7 @@ app.get('/', (req, res) => {
 
 // Public routes (no authentication required)
 app.use('/api/auth', authRoutes);
+app.use('/api/public/appointments', publicAppointmentRoutes);
 
 // Development: Temporarily disable auth for all routes
 // TODO: Re-enable authentication in production

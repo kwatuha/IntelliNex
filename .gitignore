@@ -36,6 +36,8 @@ api/.env.*
 !.env.example
 !**/.env.example
 !api/.env.example
+!deploy/env.api-server.example
+!deploy/env.telemedicine.example
 
 # Server DB dumps (may contain production data)
 /backups/

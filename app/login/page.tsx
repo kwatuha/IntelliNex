@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { AlertCircle, Loader2, Heart } from "lucide-react"
+import Link from "next/link"
 import { HospitalLogoImage } from "@/components/hospital-logo-image"
 import { branding } from "@/lib/branding"
 import { getAppHomeHref } from "@/lib/utils/url"
@@ -140,6 +141,12 @@ export default function LoginPage() {
               </Button>
             </form>
 
+            <p className="pt-2 text-center text-sm text-slate-600">
+              Patient?{" "}
+              <Link href="/book" className="font-medium text-[#0f4c75] underline">
+                Book an appointment without signing in
+              </Link>
+            </p>
             <div className="pt-6 border-t border-slate-200">
               <div className="rounded-xl bg-gradient-to-br from-slate-50 to-blue-50/30 border border-slate-200/50 p-5 space-y-3.5 shadow-sm">
                 <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">

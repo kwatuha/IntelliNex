@@ -66,7 +66,14 @@ function calculateAgeYears(dob, referenceDate = new Date()) {
 function requireDoctorOrAdminRole(roleName) {
   if (!roleName) return false;
   const rn = roleName.toLowerCase();
-  return rn === 'admin' || rn === 'doctor' || rn.includes('admin');
+  return (
+    rn === 'admin' ||
+    rn === 'doctor' ||
+    rn.includes('admin') ||
+    // Telemedicine-focused experience pack (role configuration)
+    rn.includes('telemedicine_clinician') ||
+    rn.includes('telemedicine clinician')
+  );
 }
 
 /** Staff who may see facility-wide telemedicine lists and join links for active visits (e.g. nurses). */
@@ -80,7 +87,8 @@ function mayViewFacilityTelemedicineBoard(roleName) {
     rn.includes('midwife') ||
     rn.includes('clinical') ||
     rn.includes('triage') ||
-    rn.includes('clinician')
+    rn.includes('clinician') ||
+    rn.includes('telemedicine')
   );
 }
 
@@ -94,7 +102,8 @@ function mayObserverJoinTelemedicine(roleName) {
     rn.includes('clinician') ||
     rn.includes('doctor') ||
     rn.includes('admin') ||
-    rn.includes('triage')
+    rn.includes('triage') ||
+    rn.includes('telemedicine')
   );
 }
 

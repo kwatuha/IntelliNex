@@ -11,6 +11,7 @@ import {
 import { useAuth } from "@/lib/auth/auth-context"
 import { useRoleMenuAccess } from "@/lib/hooks/use-role-menu-access"
 import { filterSidebarItems } from "@/lib/role-menu-filter"
+import { applyTelemedicineScopeToItems } from "@/lib/telemedicine-scope"
 import * as LucideIcons from "lucide-react"
 import {
   HelpCircle,
@@ -147,10 +148,12 @@ export const AppSidebar = memo(function AppSidebar({ activeCategory }: AppSideba
   // Get the current category
   const currentCategory = navigationCategories.find(cat => cat.id === activeCategory) || navigationCategories[0]
 
-  // Filter sidebar items based on role access
-  const allowedItems = menuLoading || !menuAccess
-    ? currentCategory.items // Show all while loading or if no access data
-    : filterSidebarItems(currentCategory.items, currentCategory.id, menuAccess)
+  // Filter sidebar items based on role access, then telemedicine POC scope-down
+  const allowedItems = applyTelemedicineScopeToItems(
+    menuLoading || !menuAccess
+      ? currentCategory.items // Show all while loading or if no access data
+      : filterSidebarItems(currentCategory.items, currentCategory.id, menuAccess)
+  )
 
   // User's landing quick links – shown in sidebar like standard nav for consistency
   const quickLinks = (user?.landingConfig as any)?.quickLinks

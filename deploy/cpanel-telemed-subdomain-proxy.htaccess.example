@@ -1,0 +1,37 @@
+# Apache (cPanel) — reverse proxy for telemedicine POC subdomain
+#   https://telemed.intellibizafrica.co.ke
+#
+# Upstream on VPS (main HMIS ports +10):
+#   UI:  http://VPS_IP:3112/hmis/...
+#   API: http://VPS_IP:3011/api/...
+#
+# Copy into the telemed.* document root as `.htaccess`.
+# SSL via cPanel AutoSSL on the subdomain.
+#
+# Smoke test from cPanel host (if SSH):
+#   curl -sS -o /dev/null -w '%{http_code}\n' http://165.22.227.234:3112/hmis/
+#   curl -sS -o /dev/null -w '%{http_code}\n' http://165.22.227.234:3011/
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  SSLProxyEngine On
+
+  <IfModule mod_headers.c>
+    RequestHeader set X-Forwarded-Proto "https" env=HTTPS
+    RequestHeader set X-Forwarded-Host "%{HTTP_HOST}e"
+  </IfModule>
+
+  # API first (same-origin /api when NEXT_PUBLIC_API_URL is empty)
+  RewriteRule ^api/(.*)$ http://165.22.227.234:3011/api/$1 [P,L]
+
+  # UI under basePath /hmis
+  # https://telemed.../        → http://VPS:3112/hmis/
+  # https://telemed.../login   → http://VPS:3112/hmis/login
+  RewriteRule ^(.*)$ http://165.22.227.234:3112/hmis/$1 [P,L]
+</IfModule>
+
+<IfModule mod_proxy.c>
+  ProxyRequests Off
+</IfModule>

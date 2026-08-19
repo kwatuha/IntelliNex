@@ -34,6 +34,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Label } from "@/components/ui/label"
 import { AddToQueueDialog, type QueueServicePointChoice, queueTypeLabel } from "@/components/add-to-queue-dialog"
+import { PublicBookingsInbox } from "@/components/public-bookings-inbox"
 
 export default function AppointmentsPage() {
   const router = useRouter()
@@ -269,6 +270,8 @@ export default function AppointmentsPage() {
           New Appointment
         </Button>
       </div>
+
+      <PublicBookingsInbox onAccepted={loadAppointments} />
 
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">

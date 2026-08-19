@@ -9,6 +9,7 @@ import { PlusCircle, FileText, Users, Building, RefreshCw, Loader2 } from "lucid
 import Link from "next/link"
 import { InsuranceProvidersTable } from "@/components/insurance-providers-table"
 import { InsurancePackagesTable } from "@/components/insurance-packages-table"
+import { InsuranceClaimsTable } from "@/components/insurance-claims-table"
 import { insuranceApi } from "@/lib/api"
 
 const TAB_VALUES = ["claims", "providers", "packages", "reports"] as const
@@ -111,15 +112,7 @@ export default function InsurancePage() {
               </CardContent>
             </Card>
           </div>
-          <Card>
-            <CardHeader>
-              <CardTitle>Insurance Claims</CardTitle>
-              <CardDescription>Claims functionality coming soon</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <p className="text-muted-foreground">Claims management will be available in a future update.</p>
-            </CardContent>
-          </Card>
+          <InsuranceClaimsTable />
         </TabsContent>
         <TabsContent value="providers" className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

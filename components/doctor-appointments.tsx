@@ -1,353 +1,329 @@
 "use client"
 
-import { useState } from "react"
-import { Calendar, Check, Clock, Download, FileText, Search, X } from "lucide-react"
-
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { useEffect, useMemo, useState } from "react"
+import Link from "next/link"
+import { format, parseISO } from "date-fns"
+import {
+  Building2,
+  Calendar,
+  Loader2,
+  RefreshCw,
+  Search,
+  UserRound,
+  Video,
+} from "lucide-react"
+import { appointmentsApi } from "@/lib/api"
+import { useToast } from "@/hooks/use-toast"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { cn } from "@/lib/utils"
 
-export function DoctorAppointments({ doctorId }: { doctorId: string }) {
+type DoctorAppointmentsProps = {
+  doctorId: string
+  /** Compact title for embedding on Telemedicine hub */
+  embedded?: boolean
+}
+
+function toYmd(d: Date) {
+  return format(d, "yyyy-MM-dd")
+}
+
+function formatTime(value: string | null | undefined) {
+  if (!value) return "—"
+  const s = String(value)
+  if (/^\d{2}:\d{2}/.test(s)) return s.slice(0, 5)
+  try {
+    return format(parseISO(s), "HH:mm")
+  } catch {
+    return s
+  }
+}
+
+function statusVariant(status: string | undefined): "default" | "secondary" | "outline" | "destructive" {
+  if (status === "confirmed" || status === "in_progress") return "default"
+  if (status === "cancelled" || status === "no_show") return "destructive"
+  if (status === "completed") return "secondary"
+  return "outline"
+}
+
+export function DoctorAppointments({ doctorId, embedded = false }: DoctorAppointmentsProps) {
+  const { toast } = useToast()
+  const [selectedDate, setSelectedDate] = useState(() => toYmd(new Date()))
+  const [facilityFilter, setFacilityFilter] = useState<string>("all")
+  const [assignmentFilter, setAssignmentFilter] = useState<"all" | "mine" | "open">("all")
   const [searchTerm, setSearchTerm] = useState("")
+  const [loading, setLoading] = useState(true)
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [rows, setRows] = useState<any[]>([])
 
-  // Mock data - would come from API in real application
-  const appointments = [
-    {
-      id: "A-1001",
-      patientId: "P-1001",
-      patientName: "John Kamau",
-      date: "2023-05-25",
-      time: "09:00 AM",
-      type: "Follow-up",
-      status: "Scheduled",
-      duration: 30,
-      reason: "Blood pressure check",
-      notes: "Patient has been compliant with medication",
-      avatar: "/vibrant-street-market.png",
-      initials: "JK",
-    },
-    {
-      id: "A-1002",
-      patientId: "P-1002",
-      patientName: "Jane Wangari",
-      date: "2023-05-25",
-      time: "10:00 AM",
-      type: "Follow-up",
-      status: "Scheduled",
-      duration: 30,
-      reason: "Medication review",
-      notes: "Patient reporting improvement in symptoms",
-      avatar: "/diverse-group-chatting.png",
-      initials: "JW",
-    },
-    {
-      id: "A-1003",
-      patientId: "P-1003",
-      patientName: "Robert Ochieng",
-      date: "2023-05-25",
-      time: "11:00 AM",
-      type: "Emergency",
-      status: "Scheduled",
-      duration: 45,
-      reason: "Chest pain",
-      notes: "Patient experiencing increased chest pain",
-      avatar: "/diverse-group-meeting.png",
-      initials: "RO",
-    },
-    {
-      id: "A-1004",
-      patientId: "P-1004",
-      patientName: "Mary Akinyi",
-      date: "2023-05-24",
-      time: "09:30 AM",
-      type: "Follow-up",
-      status: "Completed",
-      duration: 30,
-      reason: "ECG results review",
-      notes: "ECG shows normal sinus rhythm",
-      avatar: "/diverse-group-city.png",
-      initials: "MA",
-    },
-    {
-      id: "A-1005",
-      patientId: "P-1005",
-      patientName: "David Mwangi",
-      date: "2023-05-24",
-      time: "10:30 AM",
-      type: "Initial",
-      status: "Completed",
-      duration: 45,
-      reason: "New patient consultation",
-      notes: "Patient has family history of heart disease",
-      avatar: "/thoughtful-portrait.png",
-      initials: "DM",
-    },
-    {
-      id: "A-1006",
-      patientId: "P-1006",
-      patientName: "Sarah Njeri",
-      date: "2023-05-24",
-      time: "11:30 AM",
-      type: "Follow-up",
-      status: "Completed",
-      duration: 30,
-      reason: "Medication adjustment",
-      notes: "Increased dosage of beta blocker",
-      avatar: "/diverse-group-chatting.png",
-      initials: "SN",
-    },
-    {
-      id: "A-1007",
-      patientId: "P-1007",
-      patientName: "Michael Otieno",
-      date: "2023-05-23",
-      time: "09:00 AM",
-      type: "Procedure",
-      status: "Completed",
-      duration: 60,
-      reason: "Stress test",
-      notes: "Stress test showed no significant abnormalities",
-      avatar: "/diverse-group-meeting.png",
-      initials: "MO",
-    },
-    {
-      id: "A-1008",
-      patientId: "P-1001",
-      patientName: "John Kamau",
-      date: "2023-05-23",
-      time: "10:30 AM",
-      type: "Follow-up",
-      status: "Completed",
-      duration: 30,
-      reason: "Medication review",
-      notes: "Patient responding well to current medication regimen",
-      avatar: "/vibrant-street-market.png",
-      initials: "JK",
-    },
-    {
-      id: "A-1009",
-      patientId: "P-1002",
-      patientName: "Jane Wangari",
-      date: "2023-05-26",
-      time: "09:00 AM",
-      type: "Procedure",
-      status: "Scheduled",
-      duration: 60,
-      reason: "Echocardiogram",
-      notes: "Routine follow-up echocardiogram",
-      avatar: "/diverse-group-chatting.png",
-      initials: "JW",
-    },
-    {
-      id: "A-1010",
-      patientId: "P-1003",
-      patientName: "Robert Ochieng",
-      date: "2023-05-26",
-      time: "10:30 AM",
-      type: "Follow-up",
-      status: "Scheduled",
-      duration: 30,
-      reason: "Post-emergency follow-up",
-      notes: "Follow-up after emergency visit for chest pain",
-      avatar: "/diverse-group-meeting.png",
-      initials: "RO",
-    },
-  ]
+  useEffect(() => {
+    if (!doctorId) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        setLoading(true)
+        const data = await appointmentsApi.getDoctorInbox({
+          forDoctorId: doctorId,
+          date: selectedDate,
+          limit: 300,
+        })
+        if (!cancelled) setRows(data || [])
+      } catch (err: any) {
+        if (!cancelled) {
+          console.error(err)
+          toast({
+            title: "Could not load bookings",
+            description: err?.message || "Failed to load telemedicine bookings",
+            variant: "destructive",
+          })
+          setRows([])
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [doctorId, selectedDate, refreshKey, toast])
 
-  // Filter appointments based on search term
-  const filteredAppointments = appointments.filter(
-    (appointment) =>
-      appointment.patientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      appointment.patientId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      appointment.reason.toLowerCase().includes(searchTerm.toLowerCase()),
-  )
+  const facilities = useMemo(() => {
+    const map = new Map<string, { branchId: string; branchName: string; count: number }>()
+    for (const row of rows) {
+      if (row.status === "cancelled" || row.status === "no_show") continue
+      const branchId = String(row.resolvedBranchId || row.branchId || "unknown")
+      const branchName = row.branchName || (branchId === "unknown" ? "Unassigned facility" : `Facility #${branchId}`)
+      const prev = map.get(branchId)
+      if (prev) prev.count += 1
+      else map.set(branchId, { branchId, branchName, count: 1 })
+    }
+    return Array.from(map.values()).sort((a, b) => b.count - a.count || a.branchName.localeCompare(b.branchName))
+  }, [rows])
 
-  // Appointment statistics
-  const totalAppointments = appointments.length
-  const scheduledAppointments = appointments.filter((a) => a.status === "Scheduled").length
-  const completedAppointments = appointments.filter((a) => a.status === "Completed").length
-  const cancelledAppointments = appointments.filter((a) => a.status === "Cancelled").length
-  const avgDuration = Math.round(
-    appointments.reduce((sum, appointment) => sum + appointment.duration, 0) / appointments.length,
-  )
+  const filtered = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase()
+    return rows.filter((row) => {
+      if (row.status === "cancelled" || row.status === "no_show") return false
+
+      const branchId = String(row.resolvedBranchId || row.branchId || "unknown")
+      if (facilityFilter !== "all" && branchId !== facilityFilter) return false
+
+      const isMine = row.doctorId != null && String(row.doctorId) === String(doctorId)
+      const isOpen = row.doctorId == null || row.doctorId === ""
+      if (assignmentFilter === "mine" && !isMine) return false
+      if (assignmentFilter === "open" && !isOpen) return false
+
+      if (!q) return true
+      const name = `${row.patientFirstName || ""} ${row.patientLastName || ""}`.trim().toLowerCase()
+      const number = String(row.patientNumber || "").toLowerCase()
+      const reason = String(row.reason || "").toLowerCase()
+      const facility = String(row.branchName || "").toLowerCase()
+      return name.includes(q) || number.includes(q) || reason.includes(q) || facility.includes(q)
+    })
+  }, [rows, facilityFilter, assignmentFilter, searchTerm, doctorId])
+
+  const mineCount = filtered.filter((r) => r.doctorId != null && String(r.doctorId) === String(doctorId)).length
+  const openCount = filtered.filter((r) => r.doctorId == null || r.doctorId === "").length
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <div>
-              <CardTitle>Appointment Management</CardTitle>
-              <CardDescription>View and manage appointments for Dr. {doctorId.split("-")[1]}</CardDescription>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm">
-                <Calendar className="mr-2 h-4 w-4" />
-                Schedule
-              </Button>
-              <Button variant="outline" size="sm">
-                <Download className="mr-2 h-4 w-4" />
-                Export
-              </Button>
+    <Card className={embedded ? "border-0 shadow-none bg-transparent" : undefined}>
+      <CardHeader className={embedded ? "px-0 pt-0" : undefined}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Video className="h-4 w-4" />
+              Booked telemedicine patients
+            </CardTitle>
+            <CardDescription>
+              Patients booked for you, plus open bookings with no doctor yet. Filter by the facility that sent them.
+            </CardDescription>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={loading}
+            onClick={() => setRefreshKey((n) => n + 1)}
+          >
+            <RefreshCw className={cn("mr-2 h-4 w-4", loading && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className={cn("space-y-4", embedded && "px-0")}>
+        <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-end">
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground" htmlFor="doctor-booking-date">
+              Date
+            </label>
+            <div className="relative">
+              <Calendar className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="doctor-booking-date"
+                type="date"
+                className="w-[170px] pl-8"
+                value={selectedDate}
+                onChange={(e) => {
+                  setSelectedDate(e.target.value)
+                  setFacilityFilter("all")
+                }}
+              />
             </div>
           </div>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-            <Card>
-              <CardContent className="p-4 flex flex-col items-center justify-center text-center">
-                <Calendar className="h-8 w-8 text-primary mb-2" />
-                <div className="text-2xl font-bold">{totalAppointments}</div>
-                <p className="text-sm text-muted-foreground">Total Appointments</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4 flex flex-col items-center justify-center text-center">
-                <Check className="h-8 w-8 text-primary mb-2" />
-                <div className="text-2xl font-bold">{completedAppointments}</div>
-                <p className="text-sm text-muted-foreground">Completed</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4 flex flex-col items-center justify-center text-center">
-                <Clock className="h-8 w-8 text-primary mb-2" />
-                <div className="text-2xl font-bold">{scheduledAppointments}</div>
-                <p className="text-sm text-muted-foreground">Scheduled</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4 flex flex-col items-center justify-center text-center">
-                <X className="h-8 w-8 text-primary mb-2" />
-                <div className="text-2xl font-bold">{cancelledAppointments}</div>
-                <p className="text-sm text-muted-foreground">Cancelled</p>
-              </CardContent>
-            </Card>
+
+          <div className="space-y-1 min-w-[220px] flex-1">
+            <label className="text-xs text-muted-foreground">Sending facility</label>
+            <Select value={facilityFilter} onValueChange={setFacilityFilter}>
+              <SelectTrigger>
+                <SelectValue placeholder="All facilities" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">
+                  All facilities ({rows.filter((r) => r.status !== "cancelled" && r.status !== "no_show").length})
+                </SelectItem>
+                {facilities.map((f) => (
+                  <SelectItem key={f.branchId} value={f.branchId}>
+                    {f.branchName} ({f.count})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
-          <Tabs defaultValue="all">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-4">
-              <TabsList>
-                <TabsTrigger value="all">All Appointments</TabsTrigger>
-                <TabsTrigger value="scheduled">Scheduled</TabsTrigger>
-                <TabsTrigger value="completed">Completed</TabsTrigger>
-                <TabsTrigger value="cancelled">Cancelled</TabsTrigger>
-              </TabsList>
-              <div className="flex items-center gap-2">
-                <div className="relative w-full md:w-64">
-                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    type="search"
-                    placeholder="Search appointments..."
-                    className="w-full pl-8"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                  />
-                </div>
-                <Select defaultValue="date-desc">
-                  <SelectTrigger className="w-[180px]">
-                    <SelectValue placeholder="Sort by" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="date-desc">Date (Newest)</SelectItem>
-                    <SelectItem value="date-asc">Date (Oldest)</SelectItem>
-                    <SelectItem value="patient">Patient Name</SelectItem>
-                    <SelectItem value="type">Appointment Type</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+          <div className="space-y-1 min-w-[180px]">
+            <label className="text-xs text-muted-foreground">Assignment</label>
+            <Select
+              value={assignmentFilter}
+              onValueChange={(v) => setAssignmentFilter(v as "all" | "mine" | "open")}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Assigned + open</SelectItem>
+                <SelectItem value="mine">Booked for me</SelectItem>
+                <SelectItem value="open">No doctor specified</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
 
-            <TabsContent value="all" className="space-y-4">
-              <div className="rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Appointment ID</TableHead>
-                      <TableHead>Patient</TableHead>
-                      <TableHead>Date</TableHead>
-                      <TableHead>Time</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Duration</TableHead>
-                      <TableHead>Reason</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Actions</TableHead>
+          <div className="space-y-1 min-w-[200px] flex-1">
+            <label className="text-xs text-muted-foreground">Search</label>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                className="pl-8"
+                placeholder="Patient, number, reason…"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2 text-sm">
+          <Badge variant="secondary">{filtered.length} showing</Badge>
+          <Badge variant="outline">{mineCount} for you</Badge>
+          <Badge variant="outline">{openCount} open</Badge>
+          {facilityFilter !== "all" ? (
+            <Badge variant="default" className="gap-1">
+              <Building2 className="h-3 w-3" />
+              {facilities.find((f) => f.branchId === facilityFilter)?.branchName || "Facility"}
+            </Badge>
+          ) : null}
+        </div>
+
+        {loading ? (
+          <div className="flex justify-center py-12 text-muted-foreground">
+            <Loader2 className="h-8 w-8 animate-spin" />
+          </div>
+        ) : filtered.length === 0 ? (
+          <p className="py-10 text-center text-sm text-muted-foreground">
+            No booked patients for this date
+            {facilityFilter !== "all" ? " from the selected facility" : ""}.
+            Facilities book from their calendar; open bookings (no doctor) appear here for you to pick up.
+          </p>
+        ) : (
+          <div className="rounded-md border overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Time</TableHead>
+                  <TableHead>Patient</TableHead>
+                  <TableHead>Sending facility</TableHead>
+                  <TableHead>Assignment</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Reason</TableHead>
+                  <TableHead className="text-right">Open</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filtered.map((row) => {
+                  const name =
+                    `${row.patientFirstName || ""} ${row.patientLastName || ""}`.trim() || "—"
+                  const isMine = row.doctorId != null && String(row.doctorId) === String(doctorId)
+                  const isOpen = row.doctorId == null || row.doctorId === ""
+                  return (
+                    <TableRow key={row.appointmentId}>
+                      <TableCell className="whitespace-nowrap font-medium">
+                        {formatTime(row.appointmentTime)}
+                      </TableCell>
+                      <TableCell>
+                        <p className="font-medium">{name}</p>
+                        {row.patientNumber ? (
+                          <p className="text-xs text-muted-foreground">{row.patientNumber}</p>
+                        ) : null}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="gap-1 font-normal">
+                          <Building2 className="h-3 w-3" />
+                          {row.branchName || "Unassigned"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {isMine ? (
+                          <Badge>For you</Badge>
+                        ) : isOpen ? (
+                          <Badge variant="secondary" className="gap-1">
+                            <UserRound className="h-3 w-3" />
+                            Open
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline">Other doctor</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={statusVariant(row.status)}>
+                          {(row.status || "scheduled").replace(/_/g, " ")}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="max-w-[200px] truncate" title={row.reason || ""}>
+                        {row.reason || "—"}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          {row.patientId ? (
+                            <Button size="sm" variant="outline" asChild>
+                              <Link href={`/patients/${row.patientId}`}>Patient</Link>
+                            </Button>
+                          ) : null}
+                          <Button size="sm" asChild>
+                            <Link href="/telemedicine/create">Start visit</Link>
+                          </Button>
+                        </div>
+                      </TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredAppointments.map((appointment) => (
-                      <TableRow key={appointment.id}>
-                        <TableCell className="font-medium">{appointment.id}</TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <Avatar className="h-8 w-8">
-                              <AvatarImage
-                                src={appointment.avatar || "/placeholder.svg"}
-                                alt={appointment.patientName}
-                              />
-                              <AvatarFallback>{appointment.initials}</AvatarFallback>
-                            </Avatar>
-                            <div>
-                              <div>{appointment.patientName}</div>
-                              <div className="text-xs text-muted-foreground">{appointment.patientId}</div>
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell>{appointment.date}</TableCell>
-                        <TableCell>{appointment.time}</TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={
-                              appointment.type === "Emergency"
-                                ? "destructive"
-                                : appointment.type === "Procedure"
-                                  ? "secondary"
-                                  : "outline"
-                            }
-                          >
-                            {appointment.type}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>{appointment.duration} min</TableCell>
-                        <TableCell>{appointment.reason}</TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={
-                              appointment.status === "Completed"
-                                ? "default"
-                                : appointment.status === "Scheduled"
-                                  ? "secondary"
-                                  : "outline"
-                            }
-                          >
-                            {appointment.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <Button variant="ghost" size="icon">
-                              <FileText className="h-4 w-4" />
-                            </Button>
-                            <Button variant="ghost" size="icon">
-                              <Calendar className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </TabsContent>
-
-            {/* Similar content for other tabs */}
-          </Tabs>
-        </CardContent>
-      </Card>
-    </div>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }

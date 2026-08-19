@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 const { notifyTelemedicineScheduled } = require('../lib/patientSms');
 const { isDailyConfigured, createDailyRoom } = require('../lib/dailyVideo');
-const { resolveBranchForRequest } = require('../lib/branchContext');
+const { getUserBranchContext, resolveBranchForRequest } = require('../lib/branchContext');
 
 const DEFAULT_VIDEO_PROVIDER = 'daily';
 
@@ -368,27 +368,136 @@ router.put('/my-defaults', async (req, res) => {
  * Held sessions are sessions that reached startedAt, not merely sessions that
  * were created. The selected branch is resolved from X-Branch-Id and the
  * caller's branch assignments.
+ *
+ * Query:
+ *   period=daily|weekly|monthly|custom
+ *   from=YYYY-MM-DD&to=YYYY-MM-DD  (required when period=custom; optional override otherwise)
+ *   scope=branch|network  (network = admin / canAccessAllBranches only)
+ *   facilityIds=1,2,3     (optional subset within allowed facilities)
+ *   includeNotStarted=0|1 (patient counts include booked-but-not-started when 1)
+ *   gender=all|Male|Female|Other
+ *   provider=zoom|google_meet|link|... (optional)
  */
 router.get('/analytics', async (req, res) => {
   try {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
-    // Read-only branch metrics: any authenticated user with a selected/assigned branch
-    // can view them (same idea as Facility Performance). Session join/list rules stay stricter.
-    const period = ['daily', 'weekly', 'monthly'].includes(String(req.query.period))
-      ? String(req.query.period)
+    const ymdRe = /^\d{4}-\d{2}-\d{2}$/;
+    const parseYmd = (value) => {
+      const s = String(value || '').slice(0, 10);
+      return ymdRe.test(s) ? s : null;
+    };
+
+    const periodRaw = String(req.query.period || 'monthly').toLowerCase();
+    const period = ['daily', 'weekly', 'monthly', 'custom'].includes(periodRaw)
+      ? periodRaw
       : 'monthly';
     const daysByPeriod = { daily: 1, weekly: 7, monthly: 30 };
-    const days = daysByPeriod[period];
+    let fromDate = parseYmd(req.query.from);
+    let toDate = parseYmd(req.query.to);
+
+    if (period === 'custom') {
+      if (!fromDate || !toDate) {
+        return res.status(400).json({ error: 'Custom period requires from and to (YYYY-MM-DD)' });
+      }
+    } else if (!fromDate || !toDate) {
+      const days = daysByPeriod[period] || 30;
+      const to = new Date();
+      to.setHours(12, 0, 0, 0);
+      const from = new Date(to);
+      from.setDate(from.getDate() - (days - 1));
+      toDate = to.toISOString().slice(0, 10);
+      fromDate = from.toISOString().slice(0, 10);
+    }
+
+    if (fromDate > toDate) {
+      const swap = fromDate;
+      fromDate = toDate;
+      toDate = swap;
+    }
+
+    // Cap range to 366 days
+    {
+      const fromMs = new Date(`${fromDate}T12:00:00`).getTime();
+      const toMs = new Date(`${toDate}T12:00:00`).getTime();
+      const spanDays = Math.floor((toMs - fromMs) / 86400000) + 1;
+      if (spanDays > 366) {
+        return res.status(400).json({ error: 'Date range cannot exceed 366 days' });
+      }
+    }
+
+    const includeNotStarted = ['1', 'true', 'yes'].includes(
+      String(req.query.includeNotStarted || '').toLowerCase()
+    );
+    const genderFilterRaw = String(req.query.gender || 'all');
+    const genderFilter = ['Male', 'Female', 'Other'].includes(genderFilterRaw)
+      ? genderFilterRaw
+      : 'all';
+    const providerFilter = String(req.query.provider || '').trim() || null;
+
     const branch = await resolveBranchForRequest(pool, req, { userId });
-    if (!branch?.branchId) {
+    const context = await getUserBranchContext(pool, userId);
+    const roleName = await getRoleNameByUserId(userId);
+    const rn = String(roleName || '').toLowerCase();
+    const canNetwork =
+      context.canAccessAllBranches || rn === 'admin' || rn.includes('admin');
+    const wantNetwork = String(req.query.scope || '').toLowerCase() === 'network';
+    const scope = wantNetwork && canNetwork ? 'network' : 'branch';
+
+    const [activeBranches] = await pool.execute(
+      `SELECT branchId, branchCode, branchName, isMainBranch
+       FROM branches WHERE isActive = 1
+       ORDER BY isMainBranch DESC, branchName ASC`
+    );
+
+    let allowedIds = [];
+    if (scope === 'network') {
+      allowedIds = activeBranches.map((b) => Number(b.branchId)).filter(Boolean);
+    } else if (branch?.branchId) {
+      allowedIds = [Number(branch.branchId)];
+    }
+
+    // Optional facility subset (admins on network, or multi-assigned users)
+    const requestedFacilityIds = String(req.query.facilityIds || '')
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    let branchIds = allowedIds;
+    if (requestedFacilityIds.length) {
+      const allowedSet = new Set(allowedIds);
+      branchIds = requestedFacilityIds.filter((id) => allowedSet.has(id));
+      if (!branchIds.length) {
+        return res.status(403).json({ error: 'Not allowed for the selected facility filter' });
+      }
+    }
+
+    const availableFacilities = (scope === 'network' ? activeBranches : activeBranches.filter((b) =>
+      allowedIds.includes(Number(b.branchId))
+    )).map((b) => ({
+      branchId: Number(b.branchId),
+      branchCode: b.branchCode || null,
+      branchName: b.branchName,
+      isMainBranch: Boolean(b.isMainBranch),
+    }));
+
+    if (!branchIds.length) {
       return res.status(200).json({
         period,
-        days,
+        from: fromDate,
+        to: toDate,
+        days: 0,
+        scope,
+        includeNotStarted,
+        gender: genderFilter,
+        provider: providerFilter,
         branch: null,
+        availableFacilities,
+        selectedFacilityIds: [],
         overview: {},
         summary: {},
+        byGender: { Male: 0, Female: 0, Other: 0 },
+        byFacility: [],
         timeSeries: [],
         byProvider: [],
         byClinician: [],
@@ -396,96 +505,262 @@ router.get('/analytics', async (req, res) => {
       });
     }
 
-    const branchId = Number(branch.branchId);
+    const ph = branchIds.map(() => '?').join(',');
+    const rangeParams = [...branchIds, fromDate, toDate];
+
+    // Patient inclusion: held-only vs booked (created in range)
+    const patientSessionPred = includeNotStarted
+      ? 'ts.createdAt >= ? AND ts.createdAt < DATE_ADD(?, INTERVAL 1 DAY)'
+      : 'ts.startedAt IS NOT NULL AND ts.startedAt >= ? AND ts.startedAt < DATE_ADD(?, INTERVAL 1 DAY)';
+
+    const heldPred =
+      'ts.startedAt IS NOT NULL AND ts.startedAt >= ? AND ts.startedAt < DATE_ADD(?, INTERVAL 1 DAY)';
+    const createdPred =
+      'ts.createdAt >= ? AND ts.createdAt < DATE_ADD(?, INTERVAL 1 DAY)';
+
+    let providerSql = '';
+    const providerParams = [];
+    if (providerFilter) {
+      providerSql = ' AND ts.provider = ?';
+      providerParams.push(providerFilter);
+    }
+
+    let genderSql = '';
+    const genderParams = [];
+    if (genderFilter === 'Male') {
+      genderSql = ` AND p.gender = 'Male'`;
+    } else if (genderFilter === 'Female') {
+      genderSql = ` AND p.gender = 'Female'`;
+    } else if (genderFilter === 'Other') {
+      genderSql = ` AND (p.gender = 'Other' OR p.gender IS NULL OR p.gender = '')`;
+    }
+
     const [overviewRows] = await pool.execute(
       `SELECT
          COUNT(DISTINCT CASE WHEN startedAt >= CURDATE() THEN sessionId END) AS sessionsToday,
          COUNT(DISTINCT CASE WHEN startedAt >= DATE_SUB(CURDATE(), INTERVAL 6 DAY) THEN sessionId END) AS sessionsWeek,
          COUNT(DISTINCT CASE WHEN startedAt >= DATE_SUB(CURDATE(), INTERVAL 29 DAY) THEN sessionId END) AS sessionsMonth
        FROM telemedicine_sessions
-       WHERE branchId = ? AND startedAt IS NOT NULL`,
-      [branchId]
+       WHERE branchId IN (${ph}) AND startedAt IS NOT NULL`,
+      branchIds
     );
 
     const [summaryRows] = await pool.execute(
       `SELECT
-         COUNT(DISTINCT CASE WHEN startedAt IS NOT NULL THEN sessionId END) AS sessionsHeld,
-         COUNT(DISTINCT CASE WHEN startedAt IS NOT NULL THEN patientId END) AS uniquePatients,
-         COUNT(DISTINCT CASE WHEN status = 'ended' AND startedAt IS NOT NULL THEN sessionId END) AS completedSessions,
+         COUNT(DISTINCT CASE WHEN ${heldPred.replace(/ts\./g, '')} THEN sessionId END) AS sessionsHeld,
+         COUNT(DISTINCT CASE WHEN ${createdPred.replace(/ts\./g, '')} THEN sessionId END) AS sessionsBooked,
+         COUNT(DISTINCT CASE WHEN ${heldPred.replace(/ts\./g, '')} THEN patientId END) AS uniquePatientsHeld,
+         COUNT(DISTINCT CASE WHEN ${createdPred.replace(/ts\./g, '')} THEN patientId END) AS uniquePatientsBooked,
+         COUNT(DISTINCT CASE WHEN status = 'ended' AND startedAt IS NOT NULL
+           AND startedAt >= ? AND startedAt < DATE_ADD(?, INTERVAL 1 DAY) THEN sessionId END) AS completedSessions,
          COUNT(DISTINCT CASE WHEN status = 'in_progress' THEN sessionId END) AS activeSessions,
-         COUNT(DISTINCT CASE WHEN startedAt IS NULL THEN sessionId END) AS notStartedSessions,
+         COUNT(DISTINCT CASE WHEN startedAt IS NULL AND ${createdPred.replace(/ts\./g, '')} THEN sessionId END) AS notStartedSessions,
          ROUND(AVG(CASE
            WHEN startedAt IS NOT NULL AND endedAt IS NOT NULL
+             AND startedAt >= ? AND startedAt < DATE_ADD(?, INTERVAL 1 DAY)
            THEN TIMESTAMPDIFF(MINUTE, startedAt, endedAt)
          END), 1) AS averageMinutes,
          COALESCE(SUM(CASE
            WHEN startedAt IS NOT NULL AND endedAt IS NOT NULL
+             AND startedAt >= ? AND startedAt < DATE_ADD(?, INTERVAL 1 DAY)
            THEN TIMESTAMPDIFF(MINUTE, startedAt, endedAt)
            ELSE 0
          END), 0) AS totalMinutes
        FROM telemedicine_sessions
-       WHERE branchId = ?
-         AND createdAt >= DATE_SUB(CURDATE(), INTERVAL ? DAY)`,
-      [branchId, days - 1]
+       WHERE branchId IN (${ph})${providerFilter ? ' AND provider = ?' : ''}`,
+      [
+        fromDate, toDate, // held for sessionsHeld
+        fromDate, toDate, // booked for sessionsBooked
+        fromDate, toDate, // uniquePatientsHeld
+        fromDate, toDate, // uniquePatientsBooked
+        fromDate, toDate, // completed
+        fromDate, toDate, // notStarted
+        fromDate, toDate, // avg
+        fromDate, toDate, // total minutes
+        ...branchIds,
+        ...(providerFilter ? [providerFilter] : []),
+      ]
     );
 
-    const [timeRows] = await pool.execute(
+    // Gender breakdown (patients matching inclusion mode)
+    const [genderRows] = await pool.execute(
+      `SELECT
+         COUNT(DISTINCT CASE WHEN p.gender = 'Male' THEN ts.patientId END) AS malePatients,
+         COUNT(DISTINCT CASE WHEN p.gender = 'Female' THEN ts.patientId END) AS femalePatients,
+         COUNT(DISTINCT CASE WHEN (p.gender = 'Other' OR p.gender IS NULL OR p.gender = '') THEN ts.patientId END) AS otherPatients
+       FROM telemedicine_sessions ts
+       LEFT JOIN patients p ON p.patientId = ts.patientId
+       WHERE ts.branchId IN (${ph})
+         AND ${patientSessionPred}${providerSql}`,
+      [...branchIds, fromDate, toDate, ...providerParams]
+    );
+
+    // Filtered unique patients (gender filter applied)
+    const [filteredPatientRows] = await pool.execute(
+      `SELECT COUNT(DISTINCT ts.patientId) AS uniquePatients
+       FROM telemedicine_sessions ts
+       LEFT JOIN patients p ON p.patientId = ts.patientId
+       WHERE ts.branchId IN (${ph})
+         AND ${patientSessionPred}${providerSql}${genderSql}`,
+      [...branchIds, fromDate, toDate, ...providerParams, ...genderParams]
+    );
+
+    const [facilityRows] = await pool.execute(
+      `SELECT
+         ts.branchId,
+         b.branchCode,
+         b.branchName,
+         COUNT(DISTINCT CASE WHEN ${heldPred} THEN ts.sessionId END) AS sessionsHeld,
+         COUNT(DISTINCT CASE WHEN ${createdPred} THEN ts.sessionId END) AS sessionsBooked,
+         COUNT(DISTINCT CASE WHEN ${heldPred}${genderSql.replace(/p\./g, 'p.')} THEN ts.patientId END) AS uniquePatientsHeld,
+         COUNT(DISTINCT CASE WHEN ${patientSessionPred}${genderSql} THEN ts.patientId END) AS uniquePatients,
+         COUNT(DISTINCT CASE WHEN ${patientSessionPred} AND p.gender = 'Male' THEN ts.patientId END) AS malePatients,
+         COUNT(DISTINCT CASE WHEN ${patientSessionPred} AND p.gender = 'Female' THEN ts.patientId END) AS femalePatients,
+         COUNT(DISTINCT CASE WHEN ${patientSessionPred} AND (p.gender = 'Other' OR p.gender IS NULL OR p.gender = '') THEN ts.patientId END) AS otherPatients
+       FROM telemedicine_sessions ts
+       LEFT JOIN patients p ON p.patientId = ts.patientId
+       LEFT JOIN branches b ON b.branchId = ts.branchId
+       WHERE ts.branchId IN (${ph})${providerSql}
+       GROUP BY ts.branchId, b.branchCode, b.branchName
+       HAVING sessionsHeld > 0 OR sessionsBooked > 0
+       ORDER BY uniquePatients DESC, sessionsHeld DESC, b.branchName ASC`,
+      [
+        // held sessionsHeld
+        fromDate, toDate,
+        // created sessionsBooked
+        fromDate, toDate,
+        // uniquePatientsHeld (+ optional gender — genderSql uses p. which is fine)
+        fromDate, toDate, ...genderParams,
+        // uniquePatients with patientSessionPred + gender
+        fromDate, toDate, ...genderParams,
+        // male
+        fromDate, toDate,
+        // female
+        fromDate, toDate,
+        // other
+        fromDate, toDate,
+        ...branchIds,
+        ...providerParams,
+      ]
+    );
+
+    // Time series: held sessions by day; also booked if includeNotStarted
+    const [timeRowsHeld] = await pool.execute(
       `SELECT DATE(startedAt) AS date, COUNT(DISTINCT sessionId) AS sessionsHeld,
               COUNT(DISTINCT patientId) AS uniquePatients
        FROM telemedicine_sessions
-       WHERE branchId = ? AND startedAt >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+       WHERE branchId IN (${ph})
+         AND startedAt IS NOT NULL
+         AND startedAt >= ? AND startedAt < DATE_ADD(?, INTERVAL 1 DAY)
+         ${providerFilter ? 'AND provider = ?' : ''}
        GROUP BY DATE(startedAt)
        ORDER BY DATE(startedAt)`,
-      [branchId, days - 1]
+      [...branchIds, fromDate, toDate, ...(providerFilter ? [providerFilter] : [])]
     );
+
+    const [timeRowsBooked] = includeNotStarted
+      ? await pool.execute(
+          `SELECT DATE(createdAt) AS date, COUNT(DISTINCT sessionId) AS sessionsBooked,
+                  COUNT(DISTINCT patientId) AS uniquePatientsBooked
+           FROM telemedicine_sessions
+           WHERE branchId IN (${ph})
+             AND createdAt >= ? AND createdAt < DATE_ADD(?, INTERVAL 1 DAY)
+             ${providerFilter ? 'AND provider = ?' : ''}
+           GROUP BY DATE(createdAt)
+           ORDER BY DATE(createdAt)`,
+          [...branchIds, fromDate, toDate, ...(providerFilter ? [providerFilter] : [])]
+        )
+      : [[]];
 
     const [providerRows] = await pool.execute(
       `SELECT provider, COUNT(DISTINCT sessionId) AS sessionsHeld
        FROM telemedicine_sessions
-       WHERE branchId = ? AND startedAt >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+       WHERE branchId IN (${ph})
+         AND startedAt IS NOT NULL
+         AND startedAt >= ? AND startedAt < DATE_ADD(?, INTERVAL 1 DAY)
+         ${providerFilter ? 'AND provider = ?' : ''}
        GROUP BY provider
        ORDER BY sessionsHeld DESC`,
-      [branchId, days - 1]
+      [...branchIds, fromDate, toDate, ...(providerFilter ? [providerFilter] : [])]
     );
 
     const [clinicianRows] = await pool.execute(
       `SELECT ts.doctorId,
               CONCAT_WS(' ', u.firstName, u.lastName) AS clinicianName,
-              COUNT(DISTINCT ts.sessionId) AS sessionsHeld,
-              COUNT(DISTINCT ts.patientId) AS uniquePatients
+              COUNT(DISTINCT CASE WHEN ${heldPred} THEN ts.sessionId END) AS sessionsHeld,
+              COUNT(DISTINCT CASE WHEN ${patientSessionPred}${genderSql} THEN ts.patientId END) AS uniquePatients
        FROM telemedicine_sessions ts
        LEFT JOIN users u ON u.userId = ts.doctorId
-       WHERE ts.branchId = ? AND ts.startedAt >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+       LEFT JOIN patients p ON p.patientId = ts.patientId
+       WHERE ts.branchId IN (${ph})${providerSql}
        GROUP BY ts.doctorId, u.firstName, u.lastName
+       HAVING sessionsHeld > 0 OR uniquePatients > 0
        ORDER BY sessionsHeld DESC
-       LIMIT 10`,
-      [branchId, days - 1]
+       LIMIT 15`,
+      [
+        fromDate, toDate,
+        fromDate, toDate, ...genderParams,
+        ...branchIds,
+        ...providerParams,
+      ]
     );
 
     const summary = summaryRows[0] || {};
     const held = Number(summary.sessionsHeld || 0);
+    const booked = Number(summary.sessionsBooked || 0);
     const completed = Number(summary.completedSessions || 0);
-    const timeIndex = new Map(
-      timeRows.map((row) => [new Date(row.date).toISOString().slice(0, 10), row])
+    const uniquePatients = Number(
+      filteredPatientRows[0]?.uniquePatients ??
+        (includeNotStarted ? summary.uniquePatientsBooked : summary.uniquePatientsHeld) ??
+        0
+    );
+
+    const heldIndex = new Map(
+      timeRowsHeld.map((row) => [new Date(row.date).toISOString().slice(0, 10), row])
+    );
+    const bookedIndex = new Map(
+      (timeRowsBooked || []).map((row) => [new Date(row.date).toISOString().slice(0, 10), row])
     );
     const timeSeries = [];
-    for (let offset = days - 1; offset >= 0; offset -= 1) {
-      const date = new Date();
-      date.setHours(12, 0, 0, 0);
-      date.setDate(date.getDate() - offset);
-      const key = date.toISOString().slice(0, 10);
-      const row = timeIndex.get(key);
-      timeSeries.push({
-        date: key,
-        sessionsHeld: Number(row?.sessionsHeld || 0),
-        uniquePatients: Number(row?.uniquePatients || 0),
-      });
+    {
+      const cursor = new Date(`${fromDate}T12:00:00`);
+      const end = new Date(`${toDate}T12:00:00`);
+      while (cursor <= end) {
+        const key = cursor.toISOString().slice(0, 10);
+        const heldRow = heldIndex.get(key);
+        const bookedRow = bookedIndex.get(key);
+        timeSeries.push({
+          date: key,
+          sessionsHeld: Number(heldRow?.sessionsHeld || 0),
+          uniquePatients: Number(heldRow?.uniquePatients || 0),
+          sessionsBooked: Number(bookedRow?.sessionsBooked || 0),
+          uniquePatientsBooked: Number(bookedRow?.uniquePatientsBooked || 0),
+        });
+        cursor.setDate(cursor.getDate() + 1);
+      }
     }
+
+    const spanDays = timeSeries.length;
 
     return res.status(200).json({
       period,
-      days,
-      branch,
+      from: fromDate,
+      to: toDate,
+      days: spanDays,
+      scope,
+      includeNotStarted,
+      gender: genderFilter,
+      provider: providerFilter,
+      canNetwork,
+      branch: scope === 'network' && branchIds.length > 1
+        ? {
+            branchId: null,
+            branchName: branchIds.length === allowedIds.length ? 'All facilities' : 'Selected facilities',
+            isNetwork: true,
+          }
+        : branch || availableFacilities.find((f) => f.branchId === branchIds[0]) || null,
+      availableFacilities,
+      selectedFacilityIds: branchIds,
       overview: {
         sessionsToday: Number(overviewRows[0]?.sessionsToday || 0),
         sessionsWeek: Number(overviewRows[0]?.sessionsWeek || 0),
@@ -493,7 +768,10 @@ router.get('/analytics', async (req, res) => {
       },
       summary: {
         sessionsHeld: held,
-        uniquePatients: Number(summary.uniquePatients || 0),
+        sessionsBooked: booked,
+        uniquePatients,
+        uniquePatientsHeld: Number(summary.uniquePatientsHeld || 0),
+        uniquePatientsBooked: Number(summary.uniquePatientsBooked || 0),
         completedSessions: completed,
         activeSessions: Number(summary.activeSessions || 0),
         notStartedSessions: Number(summary.notStartedSessions || 0),
@@ -501,6 +779,23 @@ router.get('/analytics', async (req, res) => {
         totalMinutes: Number(summary.totalMinutes || 0),
         completionRate: held ? Math.round((completed / held) * 1000) / 10 : 0,
       },
+      byGender: {
+        Male: Number(genderRows[0]?.malePatients || 0),
+        Female: Number(genderRows[0]?.femalePatients || 0),
+        Other: Number(genderRows[0]?.otherPatients || 0),
+      },
+      byFacility: facilityRows.map((row) => ({
+        branchId: Number(row.branchId),
+        branchCode: row.branchCode || null,
+        branchName: row.branchName || `Facility #${row.branchId}`,
+        sessionsHeld: Number(row.sessionsHeld || 0),
+        sessionsBooked: Number(row.sessionsBooked || 0),
+        uniquePatients: Number(row.uniquePatients || 0),
+        uniquePatientsHeld: Number(row.uniquePatientsHeld || 0),
+        malePatients: Number(row.malePatients || 0),
+        femalePatients: Number(row.femalePatients || 0),
+        otherPatients: Number(row.otherPatients || 0),
+      })),
       timeSeries,
       byProvider: providerRows.map((row) => ({
         provider: row.provider,

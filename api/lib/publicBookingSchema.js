@@ -34,6 +34,23 @@ async function ensurePublicBookingTable() {
       INDEX idx_public_booking_phone (phone)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+  const [cols] = await pool.query(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'public_appointment_requests'
+       AND COLUMN_NAME IN ('smsStatus', 'smsSentAt')`
+  );
+  const have = new Set(cols.map((c) => c.COLUMN_NAME));
+  if (!have.has('smsStatus')) {
+    await pool.query(
+      `ALTER TABLE public_appointment_requests ADD COLUMN smsStatus VARCHAR(40) NULL`
+    );
+  }
+  if (!have.has('smsSentAt')) {
+    await pool.query(
+      `ALTER TABLE public_appointment_requests ADD COLUMN smsSentAt TIMESTAMP NULL`
+    );
+  }
   ensured = true;
 }
 

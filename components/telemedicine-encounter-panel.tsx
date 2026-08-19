@@ -40,6 +40,7 @@ import { MedicationCombobox } from "@/components/medication-combobox"
 import { SymptomsAutocomplete } from "@/components/symptoms-autocomplete"
 import { cn } from "@/lib/utils"
 import { printPrescriptionFromApi } from "@/lib/print-prescription"
+import { TelemedicineVitalsCharts } from "@/components/telemedicine-vitals-charts"
 
 /** Visible scrollbars (Radix ScrollArea thumb was too faint in the telemedicine dock). */
 const encounterScrollClass = cn(
@@ -607,6 +608,9 @@ export function TelemedicineEncounterPanel({ patientId, patientDisplayName, sess
               ) : (
                 <p className="text-[10px] text-muted-foreground">No vitals on record for this patient.</p>
               )}
+              <div className="mt-2">
+                <TelemedicineVitalsCharts vitals={vitals} />
+              </div>
             </section>
             <section className="border-t border-border/40 pt-2">
               <h4 className="mb-1 font-semibold">Facility interventions</h4>

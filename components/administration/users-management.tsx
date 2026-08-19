@@ -127,7 +127,8 @@ export function UsersManagement() {
       user.email?.toLowerCase().includes(search) ||
       user.username?.toLowerCase().includes(search) ||
       user.role?.toLowerCase().includes(search) ||
-      user.department?.toLowerCase().includes(search)
+      user.department?.toLowerCase().includes(search) ||
+      user.branchName?.toLowerCase().includes(search)
     )
   })
 
@@ -189,6 +190,7 @@ export function UsersManagement() {
                   <TableHead>Username</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Role</TableHead>
+                  <TableHead>Facility</TableHead>
                   <TableHead>Department</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Created</TableHead>
@@ -214,6 +216,20 @@ export function UsersManagement() {
                     <TableCell>{user.email}</TableCell>
                     <TableCell>
                       <Badge variant="outline">{user.role || "No role"}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      {user.canAccessAllBranches ? (
+                        <div className="space-y-0.5">
+                          <span className="text-sm font-medium">All facilities</span>
+                          {user.branchName && (
+                            <div className="text-xs text-muted-foreground">
+                              Home: {user.branchName}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-sm">{user.branchName || "—"}</span>
+                      )}
                     </TableCell>
                     <TableCell>{user.department || "—"}</TableCell>
                     <TableCell>
@@ -307,6 +323,16 @@ export function UsersManagement() {
                 <div>
                   <p className="text-sm font-medium text-muted-foreground">Role</p>
                   <Badge variant="outline">{selectedUser.role || "No role"}</Badge>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Home facility</p>
+                  <p className="text-sm">{selectedUser.branchName || "—"}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Facility access</p>
+                  <p className="text-sm">
+                    {selectedUser.canAccessAllBranches ? "All facilities" : "Home facility only"}
+                  </p>
                 </div>
                 <div>
                   <p className="text-sm font-medium text-muted-foreground">Department</p>

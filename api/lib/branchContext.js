@@ -159,10 +159,115 @@ async function resolveReferralOrigin(executor = pool, req = {}, data = {}, sourc
   };
 }
 
+/**
+ * Optional JWT user id (global auth middleware is not always enabled).
+ */
+function getRequestUserId(req) {
+  if (req?.user?.id != null) return req.user.id;
+  if (req?.user?.userId != null) return req.user.userId;
+  const authHeader = req?.header?.('Authorization') || req?.headers?.authorization;
+  if (!authHeader || !String(authHeader).startsWith('Bearer ')) return null;
+  const token = String(authHeader).split(' ')[1];
+  if (!token) return null;
+  try {
+    const jwt = require('jsonwebtoken');
+    const JWT_SECRET = process.env.JWT_SECRET || 'your_fallback_secret_for_dev_only_change_this_asap';
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = decoded?.user ?? decoded;
+    return user?.id ?? user?.userId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function getRoleNameByUserId(executor, userId) {
+  if (!userId) return null;
+  const rows = await safeQuery(
+    executor,
+    `SELECT r.roleName
+     FROM users u
+     LEFT JOIN roles r ON u.roleId = r.roleId
+     WHERE u.userId = ? AND u.voided = 0 AND u.isActive = 1`,
+    [userId]
+  );
+  return rows[0]?.roleName ?? null;
+}
+
+function isAdminRoleName(roleName) {
+  const rn = String(roleName || '').toLowerCase();
+  return rn === 'admin' || rn.includes('admin');
+}
+
+/**
+ * Facility profile scope for list/create enforcement.
+ */
+async function resolveFacilityScope(executor = pool, req = {}, options = {}) {
+  const userId = options.userId != null ? options.userId : getRequestUserId(req);
+  const context = await getUserBranchContext(executor, userId);
+  const roleName = await getRoleNameByUserId(executor, userId);
+  const canAccessAllBranches =
+    Boolean(context.canAccessAllBranches) || isAdminRoleName(roleName);
+  const current = await resolveBranchForRequest(executor, req, {
+    userId,
+    body: options.body || {},
+    branchId: options.branchId,
+  });
+  const branchIds = (context.branches || [])
+    .map((b) => Number(b.branchId))
+    .filter(Boolean);
+  const currentBranchId = Number(current?.branchId) || null;
+
+  return {
+    userId,
+    roleName,
+    canAccessAllBranches,
+    currentBranchId,
+    branchIds: canAccessAllBranches
+      ? branchIds
+      : branchIds.length
+        ? branchIds
+        : currentBranchId
+          ? [currentBranchId]
+          : [],
+    currentBranch: current,
+    context,
+  };
+}
+
+function buildPatientFacilityFilter(scope, column = 'registeredBranchId') {
+  if (!scope || scope.canAccessAllBranches) {
+    return { clause: '', params: [] };
+  }
+  const ids = scope.currentBranchId
+    ? [scope.currentBranchId]
+    : (scope.branchIds || []).filter(Boolean);
+  if (!ids.length) {
+    return { clause: ' AND 1=0', params: [] };
+  }
+  if (ids.length === 1) {
+    return { clause: ` AND ${column} = ?`, params: [ids[0]] };
+  }
+  const ph = ids.map(() => '?').join(',');
+  return { clause: ` AND ${column} IN (${ph})`, params: ids };
+}
+
+function patientBelongsToScope(scope, registeredBranchId) {
+  if (!scope || scope.canAccessAllBranches) return true;
+  const rid = Number(registeredBranchId);
+  if (!Number.isFinite(rid) || rid <= 0) return false;
+  if (scope.currentBranchId) return rid === Number(scope.currentBranchId);
+  return (scope.branchIds || []).some((id) => Number(id) === rid);
+}
+
 module.exports = {
   getMainBranch,
   getRequestedBranchId,
   getUserBranchContext,
   resolveBranchForRequest,
   resolveReferralOrigin,
+  getRequestUserId,
+  resolveFacilityScope,
+  buildPatientFacilityFilter,
+  patientBelongsToScope,
+  isAdminRoleName,
 };

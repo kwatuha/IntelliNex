@@ -10,14 +10,17 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { telemedicineApi } from "@/lib/api"
 import { getTelemedicineProviderLabel } from "@/lib/telemedicine-providers"
 import { useToast } from "@/hooks/use-toast"
-import { BarChart3, ChevronLeft, ChevronRight, LayoutList, Loader2, RefreshCw, Settings, Video } from "lucide-react"
+import { BarChart3, CalendarDays, ChevronLeft, ChevronRight, ClipboardList, LayoutList, Loader2, RefreshCw, Settings, Video } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useAuth } from "@/lib/auth/auth-context"
 import {
   TelemedicineFacilityActiveVisits,
   type TelemedicineFacilityActiveVisitsHandle,
 } from "@/components/telemedicine-facility-active-visits"
 import { TelemedicineMeetingLinkActions } from "@/components/telemedicine-meeting-link-actions"
 import { TelemedicineMetrics } from "@/components/telemedicine-metrics"
+import { TelemedicineProviderCalendar } from "@/components/telemedicine-provider-calendar"
+import { DoctorAppointments } from "@/components/doctor-appointments"
 
 const PAGE_SIZE = 25
 /** Waiting = telemedicine queue + sessions not yet started. */
@@ -40,7 +43,26 @@ function humanizeStatus(status: string | undefined) {
 
 export default function TelemedicineHubPage() {
   const { toast } = useToast()
-  const [tab, setTab] = useState<"current" | "all" | "analytics">("current")
+  const { user } = useAuth()
+  const role = String(user?.role || "").toLowerCase()
+  const isNurseLike = role === "nurse" || role.includes("triage")
+  const isDoctorLike =
+    Boolean(user?.id) &&
+    !isNurseLike &&
+    (role === "doctor" ||
+      role.includes("telemedicine") ||
+      role.includes("clinical_officer") ||
+      role.includes("medical_officer") ||
+      role.includes("clinician"))
+  const [tab, setTab] = useState<"current" | "all" | "analytics" | "calendar" | "bookings">(
+    isNurseLike ? "calendar" : "current"
+  )
+
+  useEffect(() => {
+    if (isNurseLike && (tab === "bookings" || tab === "analytics" || tab === "current" || tab === "all")) {
+      setTab("calendar")
+    }
+  }, [isNurseLike, tab])
   const [page, setPage] = useState(1)
   const [allSessionsLoading, setAllSessionsLoading] = useState(false)
   const [sessions, setSessions] = useState<any[]>([])
@@ -140,28 +162,60 @@ export default function TelemedicineHubPage() {
         <Tabs
           value={tab}
           onValueChange={(v) => {
-            const next = v as "current" | "all" | "analytics"
+            const next = v as "current" | "all" | "analytics" | "calendar" | "bookings"
             setTab(next)
             if (next === "all") setPage(1)
           }}
           className="w-full"
         >
           <CardHeader className="pb-2">
-            <CardTitle className="text-lg">Facility telemedicine</CardTitle>
+            <CardTitle className="text-lg">
+              {isNurseLike ? "Schedule teleconsults" : "Facility telemedicine"}
+            </CardTitle>
+            {isNurseLike ? (
+              <p className="text-sm text-muted-foreground">
+                Book patients from your facility for teleconsult. Triage first, then schedule on the calendar.
+              </p>
+            ) : null}
             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-stretch sm:justify-between sm:gap-3">
-              <TabsList className="grid h-auto w-full max-w-2xl flex-1 grid-cols-3 gap-1 p-1 sm:min-w-0">
-                <TabsTrigger value="current" className="gap-2 py-2.5">
-                  <Video className="h-4 w-4 shrink-0" />
-                  Current visits
+              <TabsList
+                className={cn(
+                  "grid h-auto w-full flex-1 gap-1 p-1 sm:min-w-0",
+                  isNurseLike
+                    ? "max-w-md grid-cols-1"
+                    : isDoctorLike
+                      ? "max-w-4xl grid-cols-2 sm:grid-cols-5"
+                      : "max-w-3xl grid-cols-2 sm:grid-cols-4"
+                )}
+              >
+                {!isNurseLike ? (
+                  <TabsTrigger value="current" className="gap-2 py-2.5">
+                    <Video className="h-4 w-4 shrink-0" />
+                    Current visits
+                  </TabsTrigger>
+                ) : null}
+                {isDoctorLike ? (
+                  <TabsTrigger value="bookings" className="gap-2 py-2.5">
+                    <ClipboardList className="h-4 w-4 shrink-0" />
+                    My bookings
+                  </TabsTrigger>
+                ) : null}
+                {!isNurseLike ? (
+                  <TabsTrigger value="all" className="gap-2 py-2.5">
+                    <LayoutList className="h-4 w-4 shrink-0" />
+                    Session board
+                  </TabsTrigger>
+                ) : null}
+                <TabsTrigger value="calendar" className="gap-2 py-2.5">
+                  <CalendarDays className="h-4 w-4 shrink-0" />
+                  {isNurseLike ? "Schedule teleconsult" : "Calendar"}
                 </TabsTrigger>
-                <TabsTrigger value="all" className="gap-2 py-2.5">
-                  <LayoutList className="h-4 w-4 shrink-0" />
-                  Session board
-                </TabsTrigger>
-                <TabsTrigger value="analytics" className="gap-2 py-2.5">
-                  <BarChart3 className="h-4 w-4 shrink-0" />
-                  Metrics
-                </TabsTrigger>
+                {!isNurseLike ? (
+                  <TabsTrigger value="analytics" className="gap-2 py-2.5">
+                    <BarChart3 className="h-4 w-4 shrink-0" />
+                    Metrics
+                  </TabsTrigger>
+                ) : null}
               </TabsList>
               {tab === "current" ? (
                 <Button
@@ -465,6 +519,18 @@ export default function TelemedicineHubPage() {
                   </div>
                 </>
               )}
+            </TabsContent>
+
+            <TabsContent value="bookings" className="mt-0 outline-none focus-visible:ring-0">
+              {user?.id ? (
+                <DoctorAppointments doctorId={String(user.id)} embedded />
+              ) : (
+                <p className="py-8 text-center text-sm text-muted-foreground">Sign in as a doctor to view bookings.</p>
+              )}
+            </TabsContent>
+
+            <TabsContent value="calendar" className="mt-0 outline-none focus-visible:ring-0">
+              <TelemedicineProviderCalendar />
             </TabsContent>
 
             <TabsContent value="analytics" className="mt-0 outline-none focus-visible:ring-0">

@@ -205,3 +205,16 @@ export function isPathScopedDown(pathname: string): boolean {
   }
   return false
 }
+
+/** Departments offered when booking an appointment in the telemedicine pack. */
+export function filterTelemedicineAppointmentDepartments<
+  T extends { departmentName?: string | null }
+>(departments: T[]): T[] {
+  if (!isTelemedicineExperiencePack()) return departments
+  return departments
+}
+
+/** Default appointment department for telemedicine experience pack. */
+export function getDefaultAppointmentDepartment(): string {
+  return isTelemedicineExperiencePack() ? "Telemedicine" : ""
+}

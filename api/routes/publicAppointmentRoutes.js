@@ -15,9 +15,10 @@ const {
   isAdvantaConfigured,
   normalizeKenyaMobile,
   isValidKenyaMobile,
+  maskPhone,
   sendAdvantaSms,
 } = require('../lib/advantaSms');
-const { facilityName, notifyAppointmentScheduled } = require('../lib/patientSms');
+const { facilityName } = require('../lib/patientSms');
 
 const ALLOWED_CLINICS = new Set([
   'General OPD',
@@ -56,13 +57,73 @@ function whatsappLink(code) {
   return `https://wa.me/${intl}?text=${text}`;
 }
 
-function queueSms(mobile, message) {
-  if (!smsEnabled() || !isValidKenyaMobile(mobile) || !message) return;
-  setImmediate(() => {
-    sendAdvantaSms({ mobile, message: message.slice(0, 480) }).catch((err) => {
-      console.error('[publicBooking] SMS failed:', err.message || err);
-    });
-  });
+function smsSenderId() {
+  return String(process.env.ADVANTA_SHORT_CODE || '').trim() || null;
+}
+
+function requestReceivedMessage(row) {
+  const facility = facilityName();
+  const when = `${formatDate(row.preferredDate)} ${formatTime(row.preferredTime)}`.trim();
+  return (
+    `${facility}: Hi ${row.firstName}, booking ${row.code} — ${row.clinic} on ${when}. ` +
+    `Quote ${row.code} at registration. Staff will confirm your slot.`
+  );
+}
+
+function requestConfirmedMessage(row) {
+  const facility = facilityName();
+  const when = `${formatDate(row.preferredDate)} ${formatTime(row.preferredTime)}`.trim();
+  return (
+    `${facility}: ${row.firstName}, ${row.code} is confirmed for ${when} (${row.clinic}). ` +
+    `Arrive 15 minutes early and quote this code at registration.`
+  );
+}
+
+function requestDeclinedMessage(row) {
+  const facility = facilityName();
+  return (
+    `${facility}: ${row.firstName}, we could not confirm online request ${row.code} for ${row.clinic}. ` +
+    `Please call the hospital to book another slot.`
+  );
+}
+
+async function sendBookingSms(mobile, message) {
+  if (!smsEnabled()) {
+    return { sent: false, reason: 'sms_not_configured' };
+  }
+  if (!isValidKenyaMobile(mobile) || !message) {
+    return { sent: false, reason: 'invalid_mobile' };
+  }
+  try {
+    await sendAdvantaSms({ mobile, message: message.slice(0, 480) });
+    return { sent: true };
+  } catch (err) {
+    console.error('[publicBooking] SMS failed:', err.message || err);
+    return { sent: false, reason: err.message || 'sms_failed' };
+  }
+}
+
+async function recordSms(requestId, result) {
+  if (!requestId) return;
+  try {
+    await pool.execute(
+      `UPDATE public_appointment_requests
+       SET smsStatus = ?, smsSentAt = CASE WHEN ? = 'sent' THEN NOW() ELSE smsSentAt END
+       WHERE requestId = ?`,
+      [result.sent ? 'sent' : String(result.reason || 'failed').slice(0, 40), result.sent ? 'sent' : '', requestId]
+    );
+  } catch (err) {
+    console.error('[publicBooking] could not record SMS status:', err.message || err);
+  }
+}
+
+function smsPayload(mobile, result) {
+  return {
+    smsSent: Boolean(result?.sent),
+    smsTo: mobile ? maskPhone(mobile) : null,
+    smsSender: smsSenderId(),
+    smsReason: result?.sent ? null : result?.reason || null,
+  };
 }
 
 function formatTime(value) {
@@ -87,6 +148,71 @@ async function uniqueCode(conn) {
     if (!rows.length) return code;
   }
   return `TH-${Date.now().toString().slice(-6)}`;
+}
+
+async function findMatchingPatients(executor, row) {
+  const phoneNorm = normalizeKenyaMobile(row.phone);
+  const idNumber = String(row.nationalId || '').trim();
+  const firstName = String(row.firstName || '').trim();
+  const lastName = String(row.lastName || '').trim();
+  const seen = new Set();
+  const matches = [];
+
+  const pushRows = (rows, reason) => {
+    for (const p of rows || []) {
+      const id = Number(p.patientId);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      matches.push({
+        patientId: id,
+        patientNumber: p.patientNumber || null,
+        firstName: p.firstName,
+        lastName: p.lastName,
+        phone: p.phone || null,
+        idNumber: p.idNumber || null,
+        match: reason,
+      });
+    }
+  };
+
+  if (idNumber) {
+    const [byId] = await executor.execute(
+      `SELECT patientId, patientNumber, firstName, lastName, phone, idNumber
+       FROM patients WHERE voided = 0 AND idNumber = ? LIMIT 5`,
+      [idNumber]
+    );
+    pushRows(byId, 'national_id');
+  }
+
+  if (isValidKenyaMobile(phoneNorm)) {
+    const compact = phoneNorm.slice(-9);
+    const [byPhone] = await executor.execute(
+      `SELECT patientId, patientNumber, firstName, lastName, phone, idNumber
+       FROM patients
+       WHERE voided = 0 AND (
+         REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', '') LIKE ?
+         OR REPLACE(REPLACE(REPLACE(phone, ' ', ''), '-', ''), '+', '') LIKE ?
+       )
+       LIMIT 5`,
+      [`%${compact}`, `%${phoneNorm}`]
+    );
+    pushRows(byPhone, 'phone');
+  }
+
+  if (firstName && lastName) {
+    const [byName] = await executor.execute(
+      `SELECT patientId, patientNumber, firstName, lastName, phone, idNumber
+       FROM patients
+       WHERE voided = 0
+         AND LOWER(TRIM(firstName)) = LOWER(?)
+         AND LOWER(TRIM(lastName)) = LOWER(?)
+       LIMIT 5`,
+      [firstName, lastName]
+    );
+    pushRows(byName, 'name');
+  }
+
+  return matches.slice(0, 8);
 }
 
 async function findOrCreatePatient(conn, row, userId) {
@@ -162,6 +288,8 @@ function mapRow(row) {
     appointmentId: row.appointmentId,
     source: row.source,
     createdAt: row.createdAt,
+    smsStatus: row.smsStatus || null,
+    smsSentAt: row.smsSentAt || null,
     whatsappUrl: whatsappLink(row.code),
   };
 }
@@ -240,19 +368,13 @@ router.post('/', publicRateLimit({ max: 8 }), async (req, res) => {
       conn.release();
     }
 
-    const facility = facilityName();
-    const when = `${formatDate(created.preferredDate)} ${formatTime(created.preferredTime)}`;
-    const wa = whatsappNumber()
-      ? ` WhatsApp ${whatsappNumber().replace(/^254/, '0')} if you have questions.`
-      : '';
-    queueSms(
-      mobile,
-      `${facility}: ${firstName}, we received your ${clinic} request (${created.code}) for ${when}. Registration will confirm your slot.${wa}`
-    );
+    const sms = await sendBookingSms(mobile, requestReceivedMessage(created));
+    await recordSms(created.requestId, sms);
 
     res.status(201).json({
       ...mapRow(created),
-      smsQueued: smsEnabled(),
+      smsStatus: sms.sent ? 'sent' : sms.reason,
+      ...smsPayload(mobile, sms),
     });
   } catch (error) {
     console.error('Error creating public booking:', error);
@@ -293,7 +415,17 @@ router.get('/', staffAuth, async (req, res) => {
     }
     sql += ' ORDER BY createdAt DESC LIMIT 100';
     const [rows] = await pool.execute(sql, params);
-    res.json(rows.map(mapRow));
+    const mapped = [];
+    for (const row of rows) {
+      const base = mapRow(row);
+      if (row.status === 'pending') {
+        base.matches = await findMatchingPatients(pool, row);
+      } else {
+        base.matches = [];
+      }
+      mapped.push(base);
+    }
+    res.json(mapped);
   } catch (error) {
     console.error('Error listing public bookings:', error);
     res.status(500).json({ error: error.message });
@@ -326,7 +458,23 @@ router.post('/:id/accept', staffAuth, async (req, res) => {
       return res.status(409).json({ error: 'This request was already declined.' });
     }
 
-    const patientId = await findOrCreatePatient(connection, row, userId);
+    const requestedId = Number(req.body?.patientId);
+    let patientId;
+    let linkedExisting = false;
+    if (Number.isFinite(requestedId) && requestedId > 0) {
+      const [existing] = await connection.execute(
+        'SELECT patientId FROM patients WHERE patientId = ? AND voided = 0 LIMIT 1',
+        [requestedId]
+      );
+      if (!existing.length) {
+        await connection.rollback();
+        return res.status(404).json({ error: 'Selected patient was not found.' });
+      }
+      patientId = existing[0].patientId;
+      linkedExisting = true;
+    } else {
+      patientId = await findOrCreatePatient(connection, row, userId);
+    }
     const notes = [
       `Online booking ${row.code}`,
       row.insurance ? `Payer: ${row.insurance}` : null,
@@ -360,24 +508,21 @@ router.post('/:id/accept', staffAuth, async (req, res) => {
     );
     await connection.commit();
 
-    notifyAppointmentScheduled(patientId, {
-      appointmentDate: formatDate(row.preferredDate),
-      appointmentTime: formatTime(row.preferredTime),
-      department: row.clinic,
-    });
-
     const mobile = normalizeKenyaMobile(row.phone);
-    const facility = facilityName();
-    queueSms(
-      mobile,
-      `${facility}: ${row.firstName}, booking ${row.code} is confirmed for ${formatDate(row.preferredDate)} ${formatTime(row.preferredTime)} (${row.clinic}). Please arrive 15 minutes early and quote this code at registration.`
-    );
+    const sms = await sendBookingSms(mobile, requestConfirmedMessage(row));
+    await recordSms(id, sms);
 
     const [updated] = await pool.execute(
       'SELECT * FROM public_appointment_requests WHERE requestId = ?',
       [id]
     );
-    res.json({ ...mapRow(updated[0]), appointmentId: appt.insertId, patientId });
+    res.json({
+      ...mapRow(updated[0]),
+      appointmentId: appt.insertId,
+      patientId,
+      linkedExisting,
+      ...smsPayload(mobile, sms),
+    });
   } catch (error) {
     await connection.rollback();
     console.error('Error accepting public booking:', error);
@@ -408,14 +553,47 @@ router.post('/:id/decline', staffAuth, async (req, res) => {
       [userId, id]
     );
     const mobile = normalizeKenyaMobile(row.phone);
-    const facility = facilityName();
-    queueSms(
-      mobile,
-      `${facility}: ${row.firstName}, we could not confirm online request ${row.code} for ${row.clinic}. Please call the hospital to book another slot.`
-    );
-    res.json({ ...mapRow({ ...row, status: 'declined' }) });
+    const sms = await sendBookingSms(mobile, requestDeclinedMessage(row));
+    await recordSms(id, sms);
+    res.json({
+      ...mapRow({ ...row, status: 'declined' }),
+      ...smsPayload(mobile, sms),
+    });
   } catch (error) {
     console.error('Error declining public booking:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/:id/resend-sms', staffAuth, async (req, res) => {
+  try {
+    await ensurePublicBookingTable();
+    const id = Number(req.params.id);
+    const [rows] = await pool.execute(
+      'SELECT * FROM public_appointment_requests WHERE requestId = ?',
+      [id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Request not found.' });
+    const row = rows[0];
+    const mobile = normalizeKenyaMobile(row.phone);
+    const message =
+      row.status === 'accepted'
+        ? requestConfirmedMessage(row)
+        : row.status === 'declined'
+          ? requestDeclinedMessage(row)
+          : requestReceivedMessage(row);
+    const sms = await sendBookingSms(mobile, message);
+    await recordSms(id, sms);
+    if (!sms.sent) {
+      return res.status(502).json({
+        error: 'Could not send SMS.',
+        ...mapRow(row),
+        ...smsPayload(mobile, sms),
+      });
+    }
+    res.json({ ...mapRow(row), ...smsPayload(mobile, sms) });
+  } catch (error) {
+    console.error('Error resending booking SMS:', error);
     res.status(500).json({ error: error.message });
   }
 });

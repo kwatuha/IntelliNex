@@ -8,7 +8,9 @@
     "dev": "nodemon app.js",
     "migrate:telemedicine": "node scripts/run-telemedicine-migration.js",
     "migrate:telemedicine:docker": "bash scripts/run-telemedicine-migration-docker.sh",
-    "migrate:telemedicine-showcase": "node scripts/run-telemedicine-showcase-migration.js"
+    "migrate:telemedicine-showcase": "node scripts/run-telemedicine-showcase-migration.js",
+    "migrate:appointment-limits": "node scripts/run-appointment-limits-migration.js",
+    "migrate:telemedicine-department": "node scripts/run-telemedicine-department-migration.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

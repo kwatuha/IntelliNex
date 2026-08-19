@@ -3,27 +3,44 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const { resolveRegistrationFeeAmount } = require('../utils/registrationFee');
+const {
+  resolveFacilityScope,
+  buildPatientFacilityFilter,
+  patientBelongsToScope,
+  resolveBranchForRequest,
+  getRequestUserId,
+} = require('../lib/branchContext');
 
 /**
  * @route GET /api/patients
- * @description Get all patients
+ * @description Get patients visible to the caller's facility profile
  */
 router.get('/', async (req, res) => {
     try {
-        const { search, page = 1, limit = 25 } = req.query;
+        const { search, page = 1, limit = 25, branchId } = req.query;
         const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
         const limitNum = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 25));
         const offset = (pageNum - 1) * limitNum;
+        const scope = await resolveFacilityScope(pool, req);
 
         // Prefer columns used by the list UI over SELECT *
         let query = `
             SELECT patientId, patientNumber, firstName, lastName, middleName,
                    dateOfBirth, gender, phone, email, address, county, subcounty, ward,
-                   idNumber, idType, bloodGroup, createdAt, patientType
+                   idNumber, idType, bloodGroup, createdAt, patientType, registeredBranchId
             FROM patients
             WHERE voided = 0
         `;
         const params = [];
+
+        if (scope.canAccessAllBranches && branchId) {
+            query += ` AND registeredBranchId = ?`;
+            params.push(Number(branchId));
+        } else {
+            const filter = buildPatientFacilityFilter(scope, 'registeredBranchId');
+            query += filter.clause;
+            params.push(...filter.params);
+        }
 
         if (search) {
             query += ` AND (
@@ -82,16 +99,46 @@ router.get('/vitals/today', async (req, res) => {
 router.get('/:id', async (req, res) => {
     const { id } = req.params;
     try {
+        const scope = await resolveFacilityScope(pool, req);
         const [rows] = await pool.execute(
             'SELECT * FROM patients WHERE patientId = ? AND voided = 0',
             [id]
         );
 
-        if (rows.length > 0) {
-            res.status(200).json(rows[0]);
-        } else {
-            res.status(404).json({ message: 'Patient not found' });
+        if (rows.length === 0) {
+            return res.status(404).json({ message: 'Patient not found' });
         }
+
+        if (!patientBelongsToScope(scope, rows[0].registeredBranchId)) {
+            // Doctors may open patients booked for them (or open bookings) from other facilities
+            const rn = String(scope.roleName || '').toLowerCase();
+            const isDoctorLike =
+                rn === 'doctor' ||
+                rn.includes('telemedicine') ||
+                rn.includes('clinical_officer') ||
+                rn.includes('medical_officer') ||
+                rn.includes('clinician');
+            let allowedViaBooking = false;
+            if (isDoctorLike && scope.userId) {
+                const [bookingRows] = await pool.execute(
+                    `SELECT appointmentId
+                     FROM appointments
+                     WHERE patientId = ?
+                       AND (doctorId = ? OR doctorId IS NULL)
+                       AND status NOT IN ('cancelled', 'no_show')
+                     LIMIT 1`,
+                    [id, scope.userId]
+                );
+                allowedViaBooking = Boolean(bookingRows[0]);
+            }
+            if (!allowedViaBooking) {
+                return res.status(403).json({
+                    message: 'This patient belongs to another facility and is not visible on your facility profile.',
+                });
+            }
+        }
+
+        res.status(200).json(rows[0]);
     } catch (error) {
         console.error('Error fetching patient:', error);
         res.status(500).json({ message: 'Error fetching patient', error: error.message });
@@ -104,7 +151,7 @@ router.get('/:id', async (req, res) => {
  */
 router.post('/', async (req, res) => {
     const patientData = req.body;
-    const userId = req.user?.id;
+    const userId = getRequestUserId(req) || req.user?.id;
     const connection = await pool.getConnection();
 
     try {
@@ -117,11 +164,25 @@ router.post('/', async (req, res) => {
         }
 
         // Stamp registration facility from request body or X-Branch-Id header (multi-facility).
+        // Facility-scoped users are forced onto their current/assigned facility.
+        const scope = await resolveFacilityScope(connection, req, { userId, body: patientData });
         let registeredBranchId =
             Number(patientData.registeredBranchId || patientData.branchId || patientData.currentBranchId) || null;
         if (!registeredBranchId) {
-            const headerBranch = Number(req.headers['x-branch-id']);
-            if (Number.isFinite(headerBranch) && headerBranch > 0) registeredBranchId = headerBranch;
+            registeredBranchId = scope.currentBranchId || null;
+        }
+        if (!scope.canAccessAllBranches) {
+            registeredBranchId = scope.currentBranchId || scope.branchIds[0] || registeredBranchId;
+            if (registeredBranchId && !patientBelongsToScope(scope, registeredBranchId)) {
+                await connection.rollback();
+                return res.status(403).json({
+                    message: 'You can only register patients to your assigned facility.',
+                });
+            }
+        }
+        if (!registeredBranchId) {
+            const branch = await resolveBranchForRequest(connection, req, { userId, body: patientData });
+            registeredBranchId = branch?.branchId || null;
         }
 
         const [result] = await connection.execute(

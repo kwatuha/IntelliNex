@@ -13,13 +13,28 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { toast } from "@/components/ui/use-toast"
 import { PatientCombobox } from "@/components/patient-combobox"
-import { appointmentsApi, doctorsApi, departmentApi } from "@/lib/api"
+import { appointmentsApi, doctorsApi, departmentApi, isDuplicateAppointmentConflict } from "@/lib/api"
+import {
+  filterTelemedicineAppointmentDepartments,
+  getDefaultAppointmentDepartment,
+  isTelemedicineExperiencePack,
+} from "@/lib/telemedicine-scope"
 import { Loader2 } from "lucide-react"
 
 const appointmentSchema = z.object({
@@ -39,15 +54,30 @@ interface AddAppointmentFormProps {
   onOpenChange?: (open: boolean) => void
   onSuccess?: () => void
   appointment?: any
+  /** Prefill appointment date (YYYY-MM-DD) when creating a new booking */
+  defaultDate?: string
+  /** Facility to stamp on new appointments (calendar / nurse booking) */
+  defaultBranchId?: number | string | null
 }
 
-export function AddAppointmentForm({ open, onOpenChange, onSuccess, appointment }: AddAppointmentFormProps) {
+export function AddAppointmentForm({
+  open,
+  onOpenChange,
+  onSuccess,
+  appointment,
+  defaultDate,
+  defaultBranchId,
+}: AddAppointmentFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [loading, setLoading] = useState(false)
   const [doctors, setDoctors] = useState<any[]>([])
   const [departments, setDepartments] = useState<any[]>([])
   const [error, setError] = useState<string | null>(null)
   const [isMounted, setIsMounted] = useState(false)
+  const [duplicateWarning, setDuplicateWarning] = useState<{
+    message: string
+    payload: any
+  } | null>(null)
   const isEditing = !!appointment
 
   const form = useForm({
@@ -89,9 +119,30 @@ export function AddAppointmentForm({ open, onOpenChange, onSuccess, appointment 
   const loadDepartments = useCallback(async () => {
     try {
       const data = await departmentApi.getAll()
-      setDepartments(data || [])
+      let list = filterTelemedicineAppointmentDepartments(Array.isArray(data) ? [...data] : [])
+
+      if (isTelemedicineExperiencePack()) {
+        const hasTelemedicine = list.some(
+          (d) => String(d?.departmentName || "").toLowerCase() === "telemedicine"
+        )
+        if (!hasTelemedicine) {
+          list.push({ departmentId: "telemedicine", departmentName: "Telemedicine" })
+        }
+      }
+
+      list.sort((a, b) =>
+        String(a.departmentName || "").localeCompare(String(b.departmentName || ""), undefined, {
+          sensitivity: "base",
+        })
+      )
+      setDepartments(list)
     } catch (error: any) {
       console.error("Error loading departments:", error)
+      setDepartments(
+        isTelemedicineExperiencePack()
+          ? [{ departmentId: "telemedicine", departmentName: "Telemedicine" }]
+          : []
+      )
     }
   }, [])
 
@@ -105,12 +156,17 @@ export function AddAppointmentForm({ open, onOpenChange, onSuccess, appointment 
     if (open && isMounted) {
       // Set dates client-side only to avoid hydration mismatch
       const now = new Date()
+      const prefillDate =
+        defaultDate && /^\d{4}-\d{2}-\d{2}$/.test(defaultDate)
+          ? defaultDate
+          : now.toISOString().split("T")[0]
+      const defaultDepartment = getDefaultAppointmentDepartment()
       form.reset({
         patientId: "",
         patientName: "",
         doctorId: "",
-        department: "",
-        appointmentDate: now.toISOString().split("T")[0],
+        department: defaultDepartment,
+        appointmentDate: prefillDate,
         appointmentTime: now.toTimeString().split(" ")[0].substring(0, 5),
         reason: "",
         status: "scheduled",
@@ -120,6 +176,7 @@ export function AddAppointmentForm({ open, onOpenChange, onSuccess, appointment 
       loadDepartments()
     } else if (!open) {
       // Reset form when dialog closes
+      setDuplicateWarning(null)
       form.reset({
         patientId: "",
         patientName: "",
@@ -133,7 +190,7 @@ export function AddAppointmentForm({ open, onOpenChange, onSuccess, appointment 
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isMounted])
+  }, [open, isMounted, defaultDate])
 
   // Set form values when editing
   useEffect(() => {
@@ -159,65 +216,99 @@ export function AddAppointmentForm({ open, onOpenChange, onSuccess, appointment 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appointment, loading, doctors.length, departments.length, open, isMounted])
 
+  const buildPayload = (values: z.infer<typeof appointmentSchema>) => {
+    const payload: any = {
+      patientId: parseInt(values.patientId),
+      appointmentDate: values.appointmentDate,
+      appointmentTime: values.appointmentTime,
+      status: values.status || "scheduled",
+    }
+
+    if (values.doctorId && values.doctorId !== "none") {
+      payload.doctorId = parseInt(values.doctorId)
+    } else {
+      payload.doctorId = null
+    }
+
+    if (values.department && values.department !== "none") {
+      payload.department = values.department
+    } else {
+      payload.department = null
+    }
+
+    payload.reason = values.reason || null
+    payload.notes = values.notes || null
+
+    if (!isEditing && defaultBranchId != null && defaultBranchId !== "") {
+      const bid = Number(defaultBranchId)
+      if (Number.isFinite(bid) && bid > 0) payload.branchId = bid
+    }
+
+    return payload
+  }
+
+  const saveAppointment = async (payload: any, force = false) => {
+    const body = force ? { ...payload, force: true } : payload
+    if (isEditing) {
+      await appointmentsApi.update(appointment.appointmentId.toString(), body)
+      toast({
+        title: "Appointment updated",
+        description: "The appointment has been updated successfully.",
+      })
+    } else {
+      await appointmentsApi.create(body)
+      toast({
+        title: "Appointment scheduled",
+        description: "The appointment has been scheduled successfully.",
+      })
+    }
+    form.reset()
+    setDuplicateWarning(null)
+    onOpenChange?.(false)
+    onSuccess?.()
+  }
+
   const onSubmit = async (values: z.infer<typeof appointmentSchema>) => {
     try {
       setIsSubmitting(true)
       setError(null)
-
-      // Ensure all values are explicitly set (no undefined values)
-      const payload: any = {
-        patientId: parseInt(values.patientId),
-        appointmentDate: values.appointmentDate,
-        appointmentTime: values.appointmentTime,
-        status: values.status || 'scheduled',
-      }
-
-      // Only include optional fields if they have values (check for "none" which means no selection)
-      if (values.doctorId && values.doctorId !== "none") {
-        payload.doctorId = parseInt(values.doctorId)
-      } else {
-        payload.doctorId = null
-      }
-
-      if (values.department && values.department !== "none") {
-        payload.department = values.department
-      } else {
-        payload.department = null
-      }
-
-      if (values.reason) {
-        payload.reason = values.reason
-      } else {
-        payload.reason = null
-      }
-
-      if (values.notes) {
-        payload.notes = values.notes
-      } else {
-        payload.notes = null
-      }
-
-      if (isEditing) {
-        await appointmentsApi.update(appointment.appointmentId.toString(), payload)
-        toast({
-          title: "Appointment updated",
-          description: "The appointment has been updated successfully.",
-        })
-      } else {
-        await appointmentsApi.create(payload)
-        toast({
-          title: "Appointment scheduled",
-          description: "The appointment has been scheduled successfully.",
-        })
-      }
-
-      form.reset()
-      onOpenChange?.(false)
-      onSuccess?.()
+      const payload = buildPayload(values)
+      await saveAppointment(payload, false)
     } catch (error: any) {
       console.error("Error saving appointment:", error)
+      if (isDuplicateAppointmentConflict(error)) {
+        setDuplicateWarning({
+          message:
+            error?.response?.message ||
+            error.message ||
+            "This patient already has an appointment for this service at the same date and time.",
+          payload: buildPayload(values),
+        })
+        return
+      }
       const errorMessage = error.message || error.response?.message || "Failed to save appointment"
       setError(errorMessage)
+      toast({
+        title: isEditing ? "Error updating appointment" : "Error scheduling appointment",
+        description: errorMessage,
+        variant: "destructive",
+      })
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const handleForceSave = async () => {
+    if (!duplicateWarning) return
+    try {
+      setIsSubmitting(true)
+      setError(null)
+      await saveAppointment(duplicateWarning.payload, true)
+    } catch (error: any) {
+      console.error("Error force-saving appointment:", error)
+      const errorMessage = error.message || error.response?.message || "Failed to save appointment"
+      setError(errorMessage)
+      setDuplicateWarning(null)
       toast({
         title: isEditing ? "Error updating appointment" : "Error scheduling appointment",
         description: errorMessage,
@@ -239,6 +330,7 @@ export function AddAppointmentForm({ open, onOpenChange, onSuccess, appointment 
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
@@ -341,10 +433,17 @@ export function AddAppointmentForm({ open, onOpenChange, onSuccess, appointment 
                         ))}
                         {departments.length === 0 && (
                           <>
-                            <SelectItem value="Cardiology">Cardiology</SelectItem>
-                            <SelectItem value="Neurology">Neurology</SelectItem>
-                            <SelectItem value="Internal Medicine">Internal Medicine</SelectItem>
-                            <SelectItem value="Ophthalmology">Ophthalmology</SelectItem>
+                            {isTelemedicineExperiencePack() ? (
+                              <SelectItem value="Telemedicine">Telemedicine</SelectItem>
+                            ) : (
+                              <>
+                                <SelectItem value="Consultation">Consultation</SelectItem>
+                                <SelectItem value="Cardiology">Cardiology</SelectItem>
+                                <SelectItem value="Neurology">Neurology</SelectItem>
+                                <SelectItem value="Internal Medicine">Internal Medicine</SelectItem>
+                                <SelectItem value="Ophthalmology">Ophthalmology</SelectItem>
+                              </>
+                            )}
                           </>
                         )}
                       </SelectContent>
@@ -478,5 +577,42 @@ export function AddAppointmentForm({ open, onOpenChange, onSuccess, appointment 
         </Form>
       </DialogContent>
     </Dialog>
+
+    <AlertDialog
+      open={!!duplicateWarning}
+      onOpenChange={(next) => {
+        if (!next && !isSubmitting) setDuplicateWarning(null)
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Possible duplicate appointment</AlertDialogTitle>
+          <AlertDialogDescription>
+            {duplicateWarning?.message ||
+              "This patient already has an appointment for the same service on this day."}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={isSubmitting}>Go back</AlertDialogCancel>
+          <AlertDialogAction
+            disabled={isSubmitting}
+            onClick={(e) => {
+              e.preventDefault()
+              void handleForceSave()
+            }}
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              "Book anyway"
+            )}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   )
 }

@@ -4,7 +4,7 @@ import { ModeToggle } from "@/components/mode-toggle"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { SidebarTrigger } from "@/components/ui/sidebar"
-import { Search, LogOut, Building2, Store } from "lucide-react"
+import { Search, LogOut, Building2, Store, UserRound } from "lucide-react"
 import { BreadcrumbsEnhanced } from "@/components/breadcrumbs-enhanced"
 import { CriticalAlertsHeaderBadge } from "@/components/critical-alerts-header-badge"
 import { PharmacyNotificationsHeaderBadge } from "@/components/pharmacy-notifications-header-badge"
@@ -15,9 +15,11 @@ import { useChemistScope } from "@/lib/hooks/use-chemist-scope"
 
 export const Header = memo(function Header() {
   const router = useRouter()
-  const { currentBranch, accessibleBranches, setCurrentBranch } = useAuth()
+  const { user, currentBranch, accessibleBranches, setCurrentBranch } = useAuth()
   const { displayName: chemistDisplayName, isChemistUser } = useChemistScope()
   const canSwitchBranch = accessibleBranches.length > 1
+  const userDisplayName = (user?.name || user?.username || "").trim()
+  const userRoleLabel = user?.role ? String(user.role).replace(/_/g, " ") : ""
 
   return (
     <header className="sticky top-0 z-[60] flex h-16 items-center justify-between border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -54,12 +56,32 @@ export const Header = memo(function Header() {
             ) : (
               <span className="font-medium">{currentBranch.branchName}</span>
             )}
+            {!canSwitchBranch ? (
+              <span className="hidden text-xs text-muted-foreground xl:inline">profile</span>
+            ) : null}
           </div>
         ) : null}
         <CriticalAlertsHeaderBadge />
         <PharmacyNotificationsHeaderBadge />
         <ModeToggle />
-        
+
+        {userDisplayName ? (
+          <div
+            className="flex max-w-[10rem] items-center gap-2 rounded-md border bg-muted/40 px-2.5 py-1.5 text-sm sm:max-w-[14rem] sm:px-3 sm:py-2"
+            title={userRoleLabel ? `${userDisplayName} · ${userRoleLabel}` : userDisplayName}
+          >
+            <UserRound className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 leading-tight">
+              <div className="truncate font-medium">{userDisplayName}</div>
+              {userRoleLabel ? (
+                <div className="hidden truncate text-xs capitalize text-muted-foreground sm:block">
+                  {userRoleLabel}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
         {/* Logout Button - More Visible */}
         <Button 
           variant="destructive" 

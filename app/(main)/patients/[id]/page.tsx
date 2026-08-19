@@ -38,6 +38,7 @@ import { PatientAdmissions } from "@/components/patient-admissions"
 import { PatientDocuments } from "@/components/patient-documents"
 import { PatientAllergies } from "@/components/patient-allergies"
 import { PatientNcd } from "@/components/patient-ncd"
+import { PatientVitalsTrendCharts } from "@/components/patient-vitals-trend-charts"
 import { PatientInsurance } from "@/components/patient-insurance"
 import { PatientFamilyHistory } from "@/components/patient-family-history"
 import { PatientQueueStatus } from "@/components/patient-queue-status"
@@ -479,6 +480,7 @@ export default function PatientProfilePage() {
                 </TabsContent>
 
                 <TabsContent value="vitals" className="space-y-4">
+                  <PatientVitalsTrendCharts patientId={patientId} />
                   <PatientVitals patientId={patientId} />
                 </TabsContent>
 

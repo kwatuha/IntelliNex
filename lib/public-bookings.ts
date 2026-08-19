@@ -20,6 +20,20 @@ export type PublicBooking = {
   createdAt: string
   appointmentId?: number | null
   whatsappUrl?: string | null
+  smsSent?: boolean
+  smsTo?: string | null
+  smsSender?: string | null
+  smsReason?: string | null
+  smsStatus?: string | null
+  matches?: Array<{
+    patientId: number
+    patientNumber?: string | null
+    firstName: string
+    lastName: string
+    phone?: string | null
+    idNumber?: string | null
+    match: string
+  }>
 }
 
 export const PUBLIC_CLINICS = [
@@ -132,5 +146,11 @@ export function mapApiBooking(row: any): PublicBooking {
     createdAt: row?.createdAt || new Date().toISOString(),
     appointmentId: row?.appointmentId ?? null,
     whatsappUrl: row?.whatsappUrl || null,
+    smsSent: Boolean(row?.smsSent),
+    smsTo: row?.smsTo || null,
+    smsSender: row?.smsSender || null,
+    smsReason: row?.smsReason || null,
+    smsStatus: row?.smsStatus || null,
+    matches: Array.isArray(row?.matches) ? row.matches : [],
   }
 }

@@ -112,7 +112,11 @@ async function apiRequest<T>(endpoint: string, options: ApiOptions = {}): Promis
     // Attach additional error details for debugging
     (fullError as any).status = response.status;
     try {
-      (fullError as any).response = rawText ? JSON.parse(rawText) : null;
+      const parsed = rawText ? JSON.parse(rawText) : null;
+      (fullError as any).response = parsed;
+      if (parsed && typeof parsed === 'object' && parsed.code) {
+        (fullError as any).code = parsed.code;
+      }
     } catch {
       (fullError as any).response = { raw: rawText?.slice(0, 500) };
     }
@@ -1186,8 +1190,56 @@ export const doctorsApi = {
 
 // Appointments API
 export const appointmentsApi = {
-  getAll: (date?: string, status?: string, doctorId?: string, patientId?: string, page = 1, limit = 50) =>
-    apiRequest<any[]>(`/api/appointments?${new URLSearchParams({ page: page.toString(), limit: limit.toString(), ...(date && { date }), ...(status && { status }), ...(doctorId && { doctorId }), ...(patientId && { patientId }) })}`),
+  getAll: (
+    date?: string,
+    status?: string,
+    doctorId?: string,
+    patientId?: string,
+    page = 1,
+    limit = 50,
+    branchId?: string | number,
+    options?: { forDoctorId?: string | number }
+  ) =>
+    apiRequest<any[]>(`/api/appointments?${new URLSearchParams({
+      page: page.toString(),
+      limit: limit.toString(),
+      ...(date && { date }),
+      ...(status && { status }),
+      ...(doctorId && { doctorId }),
+      ...(patientId && { patientId }),
+      ...(branchId != null && branchId !== '' ? { branchId: String(branchId) } : {}),
+      ...(options?.forDoctorId != null && options.forDoctorId !== ''
+        ? { forDoctorId: String(options.forDoctorId) }
+        : {}),
+    })}`),
+
+  getDoctorInbox: (params: {
+    forDoctorId: string | number
+    date?: string
+    branchId?: string | number
+    status?: string
+    limit?: number
+  }) =>
+    apiRequest<any[]>(`/api/appointments?${new URLSearchParams({
+      page: '1',
+      limit: String(params.limit ?? 200),
+      forDoctorId: String(params.forDoctorId),
+      ...(params.date ? { date: params.date } : {}),
+      ...(params.branchId != null && params.branchId !== '' ? { branchId: String(params.branchId) } : {}),
+      ...(params.status ? { status: params.status } : {}),
+    })}`),
+
+  getCalendar: (from: string, to: string) =>
+    apiRequest<any>(`/api/appointments/calendar?${new URLSearchParams({ from, to })}`),
+
+  getLimit: (branchId: number | string, date: string) =>
+    apiRequest<any>(`/api/appointments/limits?${new URLSearchParams({ branchId: String(branchId), date })}`),
+
+  setLimit: (data: { branchId: number | string; maxAppointments: number; date?: string | null }) =>
+    apiRequest<{ ok: boolean; limit: any }>("/api/appointments/limits", {
+      method: "PUT",
+      body: data,
+    }),
 
   getById: (id: string) =>
     apiRequest<any>(`/api/appointments/${id}`),
@@ -1202,10 +1254,19 @@ export const appointmentsApi = {
     apiRequest<any>(`/api/appointments/${id}`, { method: 'DELETE' }),
 };
 
+/** 409 from appointment create/update when same patient+service+date/time already exists. */
+export function isDuplicateAppointmentConflict(error: any): boolean {
+  return (
+    error?.status === 409 &&
+    (error?.code === 'DUPLICATE_APPOINTMENT' ||
+      error?.response?.code === 'DUPLICATE_APPOINTMENT')
+  );
+}
+
 /** Unauthenticated create + staff inbox for /hmis/book */
 export const publicBookingsApi = {
   create: (data: Record<string, unknown>) =>
-    apiRequest<any>('/api/public/appointments', { method: 'POST', body: data, timeoutMs: 15000 }),
+    apiRequest<any>('/api/public/appointments', { method: 'POST', body: data, timeoutMs: 25000 }),
 
   lookup: (code: string) =>
     apiRequest<any>(`/api/public/appointments/lookup/${encodeURIComponent(code)}`, { timeoutMs: 10000 }),
@@ -1215,11 +1276,14 @@ export const publicBookingsApi = {
       `/api/public/appointments${status ? `?${new URLSearchParams({ status })}` : ''}`
     ),
 
-  accept: (id: string | number) =>
-    apiRequest<any>(`/api/public/appointments/${id}/accept`, { method: 'POST' }),
+  accept: (id: string | number, data?: { patientId?: number | null }) =>
+    apiRequest<any>(`/api/public/appointments/${id}/accept`, { method: 'POST', body: data || {} }),
 
   decline: (id: string | number) =>
     apiRequest<any>(`/api/public/appointments/${id}/decline`, { method: 'POST' }),
+
+  resendSms: (id: string | number) =>
+    apiRequest<any>(`/api/public/appointments/${id}/resend-sms`, { method: 'POST', timeoutMs: 25000 }),
 };
 
 // Telemedicine API (Zoom link mode + optional Meeting SDK embed via server-signed JWT)
@@ -1230,8 +1294,28 @@ export const telemedicineApi = {
   updateMyDefaults: (data: { defaultZoomJoinUrl?: string | null; defaultZoomPassword?: string | null }) =>
     apiRequest<any>('/api/telemedicine/my-defaults', { method: 'PUT', body: data }),
 
-  getAnalytics: (period: 'daily' | 'weekly' | 'monthly' = 'monthly') =>
-    apiRequest<any>(`/api/telemedicine/analytics?${new URLSearchParams({ period })}`),
+  getAnalytics: (
+    period: 'daily' | 'weekly' | 'monthly' | 'custom' = 'monthly',
+    options?: {
+      scope?: 'branch' | 'network'
+      from?: string
+      to?: string
+      facilityIds?: number[]
+      includeNotStarted?: boolean
+      gender?: 'all' | 'Male' | 'Female' | 'Other'
+      provider?: string
+    }
+  ) => {
+    const q = new URLSearchParams({ period })
+    if (options?.scope) q.set('scope', options.scope)
+    if (options?.from) q.set('from', options.from)
+    if (options?.to) q.set('to', options.to)
+    if (options?.facilityIds?.length) q.set('facilityIds', options.facilityIds.join(','))
+    if (options?.includeNotStarted) q.set('includeNotStarted', '1')
+    if (options?.gender && options.gender !== 'all') q.set('gender', options.gender)
+    if (options?.provider) q.set('provider', options.provider)
+    return apiRequest<any>(`/api/telemedicine/analytics?${q}`)
+  },
 
   listQueue: () =>
     apiRequest<any[]>('/api/telemedicine/queue'),

@@ -13,7 +13,6 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import {
-  addPublicBooking,
   mapApiBooking,
   PUBLIC_CLINICS,
   PUBLIC_INSURERS,
@@ -84,22 +83,7 @@ export default function PublicBookingPage() {
       const created = await publicBookingsApi.create(payload)
       setSubmitted(mapApiBooking(created))
     } catch (err: any) {
-      const booking = addPublicBooking({
-        firstName: payload.firstName,
-        lastName: payload.lastName,
-        phone: payload.phone,
-        nationalId: payload.nationalId,
-        shaMemberNumber: payload.shaMemberNumber,
-        clinic: payload.clinic,
-        preferredDate: payload.preferredDate,
-        preferredTime: payload.preferredTime,
-        reason: payload.reason,
-        insurance: payload.insurance,
-      })
-      setSubmitted(booking)
-      if (err?.message && !/fetch|network|failed/i.test(String(err.message))) {
-        setError("")
-      }
+      setError(err?.message || "Could not submit the booking. Please try again.")
     } finally {
       setSaving(false)
     }
@@ -129,8 +113,8 @@ export default function PublicBookingPage() {
           <CardHeader>
             <CardTitle>Book a visit</CardTitle>
             <CardDescription>
-              Request an OPD or specialist appointment. You will receive an SMS with your code.
-              Registration confirms the slot. No account is required.
+              Request an OPD or specialist appointment. We send an SMS with your booking code
+              and visit details. Registration confirms the slot. No account is required.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -145,8 +129,17 @@ export default function PublicBookingPage() {
                   {submitted.preferredDate} at {submitted.preferredTime}.
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  Present this code at registration. An SMS is sent when Advanta SMS is configured.
-                  Staff confirm the slot under Appointments → Online bookings.
+                  {submitted.smsSent
+                    ? `A confirmation SMS was sent to ${submitted.smsTo || "your phone"} with code ${submitted.code}${
+                        submitted.smsSender ? ` (sender ${submitted.smsSender})` : ""
+                      }. Check that inbox if it does not appear within a few minutes.`
+                    : submitted.smsReason === "sms_not_configured"
+                      ? "SMS is not configured on the server. Please save this code and show it at registration."
+                      : `We could not send SMS${submitted.smsReason ? ` (${submitted.smsReason})` : ""}. Please save this code and quote it at registration.`}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Staff confirm the slot under Appointments → Online bookings. This remains a
+                  request until they accept it.
                 </p>
                 {submitted.whatsappUrl ? (
                   <Button variant="outline" asChild>
@@ -315,7 +308,7 @@ export default function PublicBookingPage() {
               <p className="flex gap-2">
                 <CalendarCheck className="mt-0.5 h-4 w-4 shrink-0" />
                 Keep your request code. It is used at the desk and appears in the staff Appointments
-                inbox. An SMS is sent when messaging is configured.
+                inbox. We send an SMS with the same code and visit details.
               </p>
               <p className="flex gap-2">
                 <Shield className="mt-0.5 h-4 w-4 shrink-0" />
